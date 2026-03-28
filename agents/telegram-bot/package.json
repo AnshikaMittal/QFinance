@@ -1,0 +1,13 @@
+{
+  "name": "quickfinance-telegram-bot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/bot.ts",
+    "dev": "tsx watch src/bot.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  }
+}

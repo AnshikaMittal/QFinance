@@ -1,0 +1,50 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # Weekly Monday 6am
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+      - name: Check for outdated packages
+        run: npm outdated || true
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: TruffleHog scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+        continue-on-error: true
+      - name: Custom secret scan
+        run: |
+          FOUND=0
+          for pattern in "ghp_" "sk-" "AKIA" "ASIA" "-----BEGIN.*PRIVATE KEY" "password\s*=" "secret\s*="; do
+            if grep -rn "$pattern" src/ agents/ --include="*.ts" --include="*.tsx" --include="*.js" --include="*.json" | grep -v ".env.example" | grep -v "scanner.ts" | grep -v "test"; then
+              FOUND=1
+            fi
+          done
+          if [ $FOUND -eq 1 ]; then
+            echo "::warning::Potential secrets detected. Please review."
+          else
+            echo "No secrets found."
+          fi

@@ -1,0 +1,13 @@
+{
+  "name": "quickfinance-auto-resolver",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/resolver.ts",
+    "dev": "tsx watch src/resolver.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  }
+}

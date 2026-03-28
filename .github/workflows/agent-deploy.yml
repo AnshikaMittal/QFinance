@@ -1,0 +1,52 @@
+name: Agent Auto-Deploy
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  validate-and-merge:
+    # Only run on PRs from the auto-resolver
+    if: startsWith(github.head_ref, 'auto-fix/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type Check
+        run: npm run type-check
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Security Scan
+        run: |
+          if grep -rn "ghp_\|sk-\|AKIA\|ASIA\|-----BEGIN.*PRIVATE KEY" src/ --include="*.ts" --include="*.tsx" --include="*.js" --include="*.json"; then
+            echo "::error::Potential secrets in agent PR"
+            exit 1
+          fi
+
+      - name: Auto-merge if all checks pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr review ${{ github.event.pull_request.number }} --approve
+          gh pr merge ${{ github.event.pull_request.number }} --squash --auto

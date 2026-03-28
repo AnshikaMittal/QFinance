@@ -1,0 +1,13 @@
+{
+  "name": "quickfinance-security-scanner",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "scan": "tsx src/scanner.ts",
+    "scan:project": "tsx src/scanner.ts --dir ../../"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "quickfinance-issue-poller",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/poller.ts",
+    "dev": "tsx watch src/poller.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  }
+}
