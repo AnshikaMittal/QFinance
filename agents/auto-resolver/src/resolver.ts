@@ -83,7 +83,10 @@ function getConfig() {
   const pollInterval = parseInt(process.env.POLL_INTERVAL ?? '60', 10);
   const worktreeBase = join(projectDir, '..', '.qf-worktrees');
 
-  return { githubToken, githubRepo, projectDir, issuesDir, pollInterval, worktreeBase };
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+
+  return { githubToken, githubRepo, projectDir, issuesDir, pollInterval, worktreeBase, telegramToken, telegramChatId };
 }
 
 // --- Issue Store ---
@@ -285,6 +288,44 @@ async function createPullRequest(
   return res.json() as Promise<{ number: number; html_url: string }>;
 }
 
+// --- Telegram Notification ---
+async function notifyTelegram(
+  config: ReturnType<typeof getConfig>,
+  issue: LocalIssue,
+  outcome: { success: true; prNumber: number; prUrl: string; branch: string } | { success: false; error: string },
+): Promise<void> {
+  if (!config.telegramToken || !config.telegramChatId) return;
+
+  const lines: string[] = [];
+
+  if (outcome.success) {
+    lines.push(`✅ *Issue #${issue.number} Resolved*`);
+    lines.push(`${issue.title}`);
+    lines.push('');
+    lines.push(`Branch: \`${outcome.branch}\``);
+    lines.push(`PR: [#${outcome.prNumber}](${outcome.prUrl})`);
+  } else {
+    lines.push(`❌ *Issue #${issue.number} Resolution Failed*`);
+    lines.push(`${issue.title}`);
+    lines.push('');
+    lines.push(`Error: ${outcome.error}`);
+  }
+
+  try {
+    await fetch(`https://api.telegram.org/bot${config.telegramToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: config.telegramChatId,
+        text: lines.join('\n'),
+        parse_mode: 'Markdown',
+      }),
+    });
+  } catch (err) {
+    console.error('   ⚠ Telegram notification failed:', err);
+  }
+}
+
 // --- Resolve Issue ---
 async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIssue): Promise<void> {
   console.log(`\n🔧 Resolving #${issue.number}: ${issue.title}`);
@@ -352,6 +393,14 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     };
     updateIssue(config.issuesDir, issue);
 
+    // 7. Notify via Telegram
+    await notifyTelegram(config, issue, {
+      success: true,
+      prNumber: pr.number,
+      prUrl: pr.html_url,
+      branch: branchName,
+    });
+
   } catch (err: any) {
     console.error(`   ❌ Failed: ${err.message}`);
 
@@ -362,8 +411,14 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     };
     updateIssue(config.issuesDir, issue);
 
+    // Notify failure via Telegram
+    await notifyTelegram(config, issue, {
+      success: false,
+      error: err.message,
+    });
+
   } finally {
-    // 7. Always clean up worktree
+    // 8. Always clean up worktree
     if (worktreePath) {
       console.log('   🧹 Cleaning up worktree...');
       removeWorktree(config.projectDir, worktreePath);
