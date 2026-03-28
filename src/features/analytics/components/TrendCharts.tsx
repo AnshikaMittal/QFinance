@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../../core/db';
 import { Card as UICard, EmptyState } from '../../../ui';
@@ -45,24 +45,56 @@ export function TrendCharts() {
     return months;
   }, [transactions, monthsBack]);
 
-  // Category breakdown (pie chart)
-  const categoryData = useMemo(() => {
+  // Monthly trend by category data
+  const { monthlyCategoryData, topCategories } = useMemo(() => {
     const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonthDebits = debits.filter(t => t.date >= start);
+    // Collect all category names with totals to find top ones
+    const catTotals: Record<string, number> = {};
+    const catMeta: Record<string, { name: string; color: string }> = {};
 
-    const byCategory: Record<string, number> = {};
-    thisMonthDebits.forEach(t => {
-      byCategory[t.categoryId] = (byCategory[t.categoryId] ?? 0) + t.amount;
-    });
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
+      const monthDebits = debits.filter(t => t.date >= start && t.date <= end);
+      monthDebits.forEach(t => {
+        const cat = categories.find(c => c.id === t.categoryId);
+        const name = cat?.name ?? 'Other';
+        catTotals[name] = (catTotals[name] ?? 0) + t.amount;
+        if (!catMeta[name]) {
+          catMeta[name] = { name, color: cat?.color ?? '#9ca3af' };
+        }
+      });
+    }
 
-    return Object.entries(byCategory)
-      .map(([catId, amount]) => {
-        const cat = categories.find(c => c.id === catId);
-        return { name: cat?.name ?? 'Other', value: Math.round(amount), color: cat?.color ?? '#9ca3af' };
-      })
-      .sort((a, b) => b.value - a.value);
-  }, [debits, categories]);
+    // Top 6 categories by total spend
+    const top = Object.entries(catTotals)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name]) => ({ name, color: catMeta[name]?.color ?? '#9ca3af' }));
+
+    const topNames = new Set(top.map(c => c.name));
+
+    // Build monthly data with a key per top category
+    const data: Record<string, string | number>[] = [];
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
+      const label = start.toLocaleDateString('en-US', { month: 'short' });
+      const monthDebits = debits.filter(t => t.date >= start && t.date <= end);
+
+      const row: Record<string, string | number> = { month: label };
+      monthDebits.forEach(t => {
+        const cat = categories.find(c => c.id === t.categoryId);
+        const name = cat?.name ?? 'Other';
+        if (topNames.has(name)) {
+          row[name] = Math.round(((row[name] as number) ?? 0) + t.amount);
+        }
+      });
+      data.push(row);
+    }
+
+    return { monthlyCategoryData: data, topCategories: top };
+  }, [debits, categories, monthsBack]);
 
   // Card comparison data
   const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
@@ -152,48 +184,39 @@ export function TrendCharts() {
         </div>
       </UICard>
 
-      {/* Category breakdown — inline horizontal bars */}
-      {categoryData.length > 0 && (() => {
-        const totalCategorySpend = categoryData.reduce((s, c) => s + c.value, 0);
-        const maxValue = categoryData[0]?.value ?? 1;
-
-        return (
-          <UICard>
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">This Month by Category</h4>
-              <span className="text-xs text-gray-400 tabular-nums">{formatCurrency(totalCategorySpend)} total</span>
-            </div>
-            <div className="flex flex-col gap-2.5">
-              {categoryData.map((cat) => {
-                const pct = totalCategorySpend > 0 ? (cat.value / totalCategorySpend) * 100 : 0;
-                const barWidth = maxValue > 0 ? (cat.value / maxValue) * 100 : 0;
-                return (
-                  <div key={cat.name}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: cat.color }} />
-                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{cat.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-xs text-gray-400 tabular-nums">{pct.toFixed(0)}%</span>
-                        <span className="text-xs font-semibold text-gray-900 dark:text-white tabular-nums min-w-[60px] text-right">
-                          {formatCurrency(cat.value)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{ width: `${barWidth}%`, backgroundColor: cat.color }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </UICard>
-        );
-      })()}
+      {/* Monthly trend by category — stacked bar chart */}
+      {topCategories.length > 0 && (
+        <UICard>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <BarChart3 size={14} className="text-purple-500" />
+            Monthly Trend by Category
+          </h4>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyCategoryData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                <XAxis dataKey="month" tick={{ fontSize: 11, fill: axisColor }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: axisColor }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: isDark ? '#1f2937' : '#fff',
+                    border: 'none',
+                    borderRadius: '12px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                    fontSize: '12px',
+                    color: isDark ? '#f3f4f6' : '#111827',
+                  }}
+                  formatter={(value: number) => formatCurrency(value)}
+                />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
+                {topCategories.map((cat) => (
+                  <Bar key={cat.name} dataKey={cat.name} stackId="cat" fill={cat.color} radius={[0, 0, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </UICard>
+      )}
 
       {/* Card comparison bar chart */}
       {cardData.length > 1 && (
