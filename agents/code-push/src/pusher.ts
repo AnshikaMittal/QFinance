@@ -152,6 +152,185 @@ async function createPR(
   return pr.html_url;
 }
 
+// --- Wait for GitHub Pages Deployment ---
+async function waitForDeployment(
+  token: string,
+  repo: string,
+  commitSha: string,
+  maxWaitMs = 300_000,
+  pollMs = 15_000,
+): Promise<{ success: boolean; state: string }> {
+  const deadline = Date.now() + maxWaitMs;
+  console.log(`  ⏳ Waiting for GitHub Pages deployment (commit ${commitSha.slice(0, 7)})...`);
+
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/deployments?sha=${commitSha}&environment=github-pages&per_page=1`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' } },
+      );
+
+      if (res.ok) {
+        const deployments = (await res.json()) as Array<{ id: number }>;
+        if (deployments.length > 0 && deployments[0]) {
+          const statusRes = await fetch(
+            `https://api.github.com/repos/${repo}/deployments/${deployments[0].id}/statuses?per_page=1`,
+            { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' } },
+          );
+
+          if (statusRes.ok) {
+            const statuses = (await statusRes.json()) as Array<{ state: string }>;
+            if (statuses.length > 0 && statuses[0]) {
+              const state = statuses[0].state;
+              if (state === 'success') { console.log(`  🚀 Deployment successful!`); return { success: true, state }; }
+              if (state === 'failure' || state === 'error') { console.log(`  ❌ Deployment failed (state: ${state})`); return { success: false, state }; }
+            }
+          }
+        }
+      }
+    } catch { /* network hiccup — retry */ }
+
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  console.log(`  ⚠️  Deployment timed out after ${maxWaitMs / 1000}s`);
+  return { success: false, state: 'timeout' };
+}
+
+// --- Fetch Build Error Details from GitHub Actions ---
+async function fetchBuildError(token: string, repo: string, commitSha: string): Promise<string> {
+  try {
+    const runsRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/runs?head_sha=${commitSha}&status=failure&per_page=1`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' } },
+    );
+
+    if (!runsRes.ok) return 'Could not fetch workflow runs';
+
+    const runsData = (await runsRes.json()) as { workflow_runs: Array<{ id: number; name: string; html_url: string }> };
+    if (!runsData.workflow_runs || runsData.workflow_runs.length === 0) return 'No failed workflow runs found';
+
+    const run = runsData.workflow_runs[0]!;
+
+    // Get failed jobs and steps
+    const jobsRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/runs/${run.id}/jobs`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' } },
+    );
+
+    if (!jobsRes.ok) return `Failed run: ${run.html_url}`;
+
+    const jobsData = (await jobsRes.json()) as {
+      jobs: Array<{
+        name: string;
+        conclusion: string;
+        steps?: Array<{ name: string; conclusion: string }>;
+      }>;
+    };
+
+    const failedJobs = jobsData.jobs.filter(j => j.conclusion === 'failure');
+    if (failedJobs.length === 0) return `Failed run: ${run.html_url}`;
+
+    // Get annotations (actual error messages) from the check run
+    let annotations = '';
+    try {
+      const checkRes = await fetch(
+        `https://api.github.com/repos/${repo}/commits/${commitSha}/check-runs?per_page=10`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' } },
+      );
+      if (checkRes.ok) {
+        const checkData = (await checkRes.json()) as {
+          check_runs: Array<{
+            name: string;
+            conclusion: string;
+            output: { annotations_count: number; annotations_url: string; title: string; summary: string };
+          }>;
+        };
+        const failedChecks = checkData.check_runs.filter(c => c.conclusion === 'failure');
+        for (const check of failedChecks) {
+          if (check.output?.summary) {
+            annotations += `\n\n### ${check.name}\n${check.output.summary}`;
+          }
+          // Fetch annotations for file-level errors
+          if (check.output?.annotations_count > 0) {
+            try {
+              const annRes = await fetch(check.output.annotations_url, {
+                headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' },
+              });
+              if (annRes.ok) {
+                const anns = (await annRes.json()) as Array<{ path: string; start_line: number; message: string; annotation_level: string }>;
+                for (const ann of anns.slice(0, 10)) {
+                  annotations += `\n- \`${ann.path}:${ann.start_line}\`: ${ann.message}`;
+                }
+              }
+            } catch { /* best effort */ }
+          }
+        }
+      }
+    } catch { /* best effort */ }
+
+    const errorDetails = failedJobs.map(job => {
+      const failedSteps = (job.steps ?? []).filter(s => s.conclusion === 'failure');
+      const stepInfo = failedSteps.map(s => `  - Step "${s.name}" failed`).join('\n');
+      return `Job "${job.name}" failed:\n${stepInfo || '  - No step details available'}`;
+    }).join('\n\n');
+
+    return `${errorDetails}${annotations}\n\nWorkflow run: ${run.html_url}`;
+  } catch (err: any) {
+    return `Could not fetch build error: ${err.message}`;
+  }
+}
+
+// --- Create GitHub Issue ---
+async function createGitHubIssue(
+  token: string,
+  repo: string,
+  title: string,
+  body: string,
+  labels: string[] = ['bug', 'deployment-failure'],
+): Promise<{ number: number; html_url: string } | null> {
+  // Dedup: check if an open issue with same title prefix already exists
+  try {
+    const prefix = title.split(' — ')[0] ?? title.slice(0, 60);
+    const query = encodeURIComponent(`repo:${repo} is:issue is:open in:title "${prefix}"`);
+    const searchRes = await fetch(
+      `https://api.github.com/search/issues?q=${query}&per_page=1`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.v3+json' } },
+    );
+    if (searchRes.ok) {
+      const data = (await searchRes.json()) as { total_count: number };
+      if (data.total_count > 0) {
+        console.log(`  ⏭️  Skipping issue creation — open issue already exists for this failure`);
+        return null;
+      }
+    }
+  } catch { /* if search fails, proceed with creation */ }
+
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title, body, labels }),
+    });
+
+    if (!res.ok) {
+      console.error(`  ⚠️  Failed to create issue (${res.status}): ${await res.text()}`);
+      return null;
+    }
+
+    const issue = (await res.json()) as { number: number; html_url: string };
+    console.log(`  📋 Created issue #${issue.number}: ${issue.html_url}`);
+    return issue;
+  } catch (err: any) {
+    console.error(`  ⚠️  Failed to create issue: ${err.message}`);
+    return null;
+  }
+}
+
 // --- Telegram Notification ---
 async function notifyTelegram(
   token: string,
@@ -301,6 +480,77 @@ async function runPush(mode: Mode, message: string): Promise<PushResult> {
   }
 
   console.log('');
+  console.log('  ✅ Push complete!');
+
+  // 6. Wait for GitHub Pages deployment and create issue on failure
+  if (mode === 'push' && branch === 'main') {
+    const fullCommitSha = git(projectDir, 'rev-parse', 'HEAD');
+    const deployment = await waitForDeployment(config.githubToken, config.githubRepo, fullCommitSha);
+
+    if (!deployment.success) {
+      console.log('');
+      console.log('  🔍 Fetching build error details...');
+      const buildError = await fetchBuildError(config.githubToken, config.githubRepo, fullCommitSha);
+
+      const issueTitle = `[Deployment Failure]: Build failed after push \`${commitHash}\` — ${commitMessage}`;
+      const issueBody = [
+        `## Summary`,
+        ``,
+        `GitHub Pages deployment **failed** after pushing commit \`${fullCommitSha}\` to \`main\`.`,
+        ``,
+        `## Push Details`,
+        `- **Commit**: \`${fullCommitSha}\``,
+        `- **Message**: ${commitMessage}`,
+        `- **Branch**: \`${branch}\``,
+        `- **Deployment state**: \`${deployment.state}\``,
+        ``,
+        `## Build Error Details`,
+        `\`\`\``,
+        buildError,
+        `\`\`\``,
+        ``,
+        `## Changed Files`,
+        `\`\`\``,
+        changedFiles.slice(0, 20).join('\n'),
+        changedFiles.length > 20 ? `... and ${changedFiles.length - 20} more` : '',
+        `\`\`\``,
+        ``,
+        `## Fix Strategy`,
+        `1. Check the GitHub Actions run linked in the error details above`,
+        `2. Identify the file and line number causing the build failure`,
+        `3. Fix the TypeScript/build error`,
+        `4. Run \`npx tsc --noEmit && npm run build\` locally before pushing`,
+        ``,
+        `---`,
+        `*Auto-generated by QuickFinance Code Push Agent*`,
+      ].join('\n');
+
+      const failureIssue = await createGitHubIssue(
+        config.githubToken,
+        config.githubRepo,
+        issueTitle,
+        issueBody,
+        ['bug', 'deployment-failure'],
+      );
+
+      // Notify Telegram about the failure
+      if (config.telegramToken && config.telegramChatId) {
+        await notifyTelegram(
+          config.telegramToken,
+          config.telegramChatId,
+          `❌ *Deployment FAILED after push*\n\n` +
+          `Commit: \`${commitHash}\`\n` +
+          `Message: ${commitMessage}\n` +
+          (failureIssue ? `🐛 Issue: #${failureIssue.number} — ${failureIssue.html_url}\n` : '') +
+          `\n_Build error detected — GitHub issue created for auto-fix_`,
+        );
+      }
+
+      const result: PushResult = { mode, validation, branch, commitHash, error: `Deployment failed (${deployment.state})` };
+      return result;
+    }
+  }
+
   console.log('  ✅ Done!');
 
   const result: PushResult = { mode, validation, branch, commitHash, prUrl };
