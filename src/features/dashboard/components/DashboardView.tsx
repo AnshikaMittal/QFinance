@@ -513,7 +513,7 @@ export function DashboardView() {
       {/* Top categories — expandable */}
       {summary.topCategories.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Top Spending</h3>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Spending by Category</h3>
           <UICard padding="sm">
             <div className="flex flex-col">
               {summary.topCategories.map((cat) => (
