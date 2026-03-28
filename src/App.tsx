@@ -575,8 +575,8 @@ function AppContent() {
         <main className="max-w-lg mx-auto">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/transactions" element={<TransactionsPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/transactions" element={<TransactionsPage />} />
             <Route path="/import" element={<ImportPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
