@@ -2,13 +2,11 @@ import { useMemo, useState, useCallback, useEffect } from 'react';
 import {
   TrendingUp, TrendingDown, ArrowUpRight, ChevronLeft, ChevronRight,
   Receipt, ChevronDown, ChevronUp, Calendar, CreditCard, Tag, FileText,
-  Flame,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../../core/db';
 import { formatCurrency } from '../../../core/utils';
 import { Card as UICard, ProgressBar, EmptyState, Modal, Badge } from '../../../ui';
-import { useMoneySpills } from '../../analytics/hooks/useMoneySpills';
 import type { Transaction, Category } from '../../../core/types';
 
 /* ── helpers ── */
@@ -181,27 +179,7 @@ function CategoryRow({ name, color, amount, totalSpent, transactions, onTransact
   );
 }
 
-/* ── money spills summary for dashboard ── */
-
-function MoneySpillsSummary({ transactions, categories }: { transactions: Transaction[]; categories: Category[] }) {
-  const { spills, totalWaste } = useMoneySpills();
-  const [expandedSpill, setExpandedSpill] = useState<string | null>(null);
-  const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
-
-  // All hooks MUST be called before any early return (Rules of Hooks)
-  const txnMap = useMemo(() => {
-    const map = new Map<string, Transaction>();
-    transactions.forEach(t => map.set(t.id, t));
-    return map;
-  }, [transactions]);
-
-  const cardMap = useMemo(() => {
-    const map = new Map<string, { name: string; lastFour: string; color: string }>();
-    cards.forEach(c => map.set(c.id, { name: c.name, lastFour: c.lastFour, color: c.color }));
-    return map;
-  }, [cards]);
-
-  if (spills.length === 0) return null;
+/* ── main view ── */
 
   const SPILL_COLORS: Record<string, string> = {
     duplicate: '#ef4444',
@@ -532,9 +510,6 @@ export function DashboardView() {
           </UICard>
         </div>
       )}
-
-      {/* Money Spills */}
-      <MoneySpillsSummary transactions={allTransactions} categories={categories} />
 
     </div>
   );
