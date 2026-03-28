@@ -446,6 +446,90 @@ async function closeGitHubIssue(
   return true;
 }
 
+// --- Create GitHub Issue for Failures ---
+async function createGitHubIssue(
+  githubToken: string,
+  repo: string,
+  title: string,
+  body: string,
+  labels: string[] = ['bug', 'auto-resolver'],
+): Promise<{ number: number; html_url: string } | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title, body, labels }),
+    });
+
+    if (!res.ok) {
+      console.error(`   ⚠️  Failed to create issue (${res.status}): ${await res.text()}`);
+      return null;
+    }
+
+    const issue = (await res.json()) as { number: number; html_url: string };
+    console.log(`   📋 Created issue #${issue.number}: ${issue.html_url}`);
+    return issue;
+  } catch (err: any) {
+    console.error(`   ⚠️  Failed to create issue: ${err.message}`);
+    return null;
+  }
+}
+
+// --- Fetch Deployment/Build Error from GitHub Actions ---
+async function fetchBuildError(
+  githubToken: string,
+  repo: string,
+  commitSha: string,
+): Promise<string> {
+  try {
+    // Find the failed workflow run for this commit
+    const runsRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/runs?head_sha=${commitSha}&status=failure&per_page=1`,
+      { headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' } },
+    );
+
+    if (!runsRes.ok) return 'Could not fetch workflow runs';
+
+    const runsData = (await runsRes.json()) as { workflow_runs: Array<{ id: number; name: string; html_url: string }> };
+    if (!runsData.workflow_runs || runsData.workflow_runs.length === 0) return 'No failed workflow runs found for this commit';
+
+    const run = runsData.workflow_runs[0]!;
+
+    // Get jobs for this run
+    const jobsRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/runs/${run.id}/jobs`,
+      { headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' } },
+    );
+
+    if (!jobsRes.ok) return `Failed run: ${run.html_url}`;
+
+    const jobsData = (await jobsRes.json()) as {
+      jobs: Array<{
+        name: string;
+        conclusion: string;
+        steps?: Array<{ name: string; conclusion: string; number: number }>;
+      }>;
+    };
+
+    const failedJobs = jobsData.jobs.filter(j => j.conclusion === 'failure');
+    if (failedJobs.length === 0) return `Failed run: ${run.html_url}`;
+
+    const errorDetails = failedJobs.map(job => {
+      const failedSteps = (job.steps ?? []).filter(s => s.conclusion === 'failure');
+      const stepInfo = failedSteps.map(s => `  - Step "${s.name}" failed`).join('\n');
+      return `Job "${job.name}" failed:\n${stepInfo || '  - No step details available'}`;
+    }).join('\n\n');
+
+    return `${errorDetails}\n\nWorkflow run: ${run.html_url}`;
+  } catch (err: any) {
+    return `Could not fetch build error: ${err.message}`;
+  }
+}
+
 // --- Delete Remote Branch ---
 async function deleteRemoteBranch(githubToken: string, repo: string, branch: string): Promise<void> {
   try {
@@ -547,28 +631,105 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
         issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: true };
         console.log(`   🎉 Issue #${issue.number} deployed successfully!`);
       } else {
+        // Deployment failed — fetch build error details and create a new GitHub issue
+        const buildError = mergeCommitSha
+          ? await fetchBuildError(config.githubToken, config.githubRepo, mergeCommitSha)
+          : 'Could not determine merge commit SHA';
+
+        const failureIssueTitle = `[Deployment Failure]: Build failed after merging #${issue.number} — ${issue.title}`;
+        const failureIssueBody = [
+          `## Summary`,
+          ``,
+          `The GitHub Pages deployment **failed** after merging PR #${pr.number} for issue #${issue.number}.`,
+          ``,
+          `## Original Issue`,
+          `- **Issue**: #${issue.number} — ${issue.title}`,
+          `- **PR**: ${pr.html_url}`,
+          `- **Merge commit**: \`${mergeCommitSha ?? 'unknown'}\``,
+          ``,
+          `## Build Error Details`,
+          `\`\`\``,
+          buildError,
+          `\`\`\``,
+          ``,
+          `## What Needs to Happen`,
+          `1. Check the failed GitHub Actions run linked above`,
+          `2. Identify the TypeScript/build error introduced by the auto-resolver's fix`,
+          `3. Fix the syntax or logic error in the affected file(s)`,
+          `4. Ensure \`npx tsc --noEmit\` and \`npm run build\` pass before pushing`,
+          ``,
+          `## Context`,
+          `The auto-resolver attempted to fix issue #${issue.number} but the generated code did not pass the build pipeline.`,
+          `This is an auto-generated issue from the QuickFinance Auto-Resolver agent.`,
+          ``,
+          `---`,
+          `*Auto-generated by QuickFinance Auto-Resolver*`,
+        ].join('\n');
+
+        const failureIssue = await createGitHubIssue(
+          config.githubToken,
+          config.githubRepo,
+          failureIssueTitle,
+          failureIssueBody,
+          ['bug', 'deployment-failure', 'auto-resolver'],
+        );
+
         await notifyTelegram(
-          `🔀 *Issue #${issue.number} merged but deployment unconfirmed*\n\n` +
+          `❌ *Issue #${issue.number} merged but deployment FAILED*\n\n` +
           `*${issue.title}*\n` +
           `PR: ${pr.html_url}\n` +
-          `🌐 Site: ${siteUrl}\n\n` +
-          `_Check GitHub Pages status manually_`
+          (failureIssue ? `🐛 Follow-up issue: #${failureIssue.number}\n` : '') +
+          `\n_Build error detected — new issue created for auto-fix_`
         );
         issue.status = 'resolved';
-        issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: true, error: 'Deployment unconfirmed' };
-        console.log(`   ⚠️  Issue #${issue.number} merged but deployment did not confirm`);
+        issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: true, error: 'Deployment failed' };
+        console.log(`   ❌ Issue #${issue.number} merged but deployment FAILED — created follow-up issue`);
       }
     } else {
-      // Merge failed — notify
+      // Merge failed — create a follow-up issue
+      const mergeFailTitle = `[Merge Failure]: Auto-merge failed for PR #${pr.number} — ${issue.title}`;
+      const mergeFailBody = [
+        `## Summary`,
+        ``,
+        `Auto-merge **failed** for PR #${pr.number} (fixing issue #${issue.number}).`,
+        ``,
+        `## Details`,
+        `- **Original Issue**: #${issue.number} — ${issue.title}`,
+        `- **PR**: ${pr.html_url}`,
+        `- **Branch**: \`${branchName}\``,
+        ``,
+        `## Possible Causes`,
+        `- Merge conflict with another recent commit on \`main\``,
+        `- Branch protection rules blocking the merge`,
+        `- Required status checks failing`,
+        ``,
+        `## What Needs to Happen`,
+        `1. Review the PR at ${pr.html_url}`,
+        `2. Resolve any merge conflicts`,
+        `3. Merge manually or fix the issue and re-push`,
+        ``,
+        `---`,
+        `*Auto-generated by QuickFinance Auto-Resolver*`,
+      ].join('\n');
+
+      const mergeFailIssue = await createGitHubIssue(
+        config.githubToken,
+        config.githubRepo,
+        mergeFailTitle,
+        mergeFailBody,
+        ['bug', 'merge-failure', 'auto-resolver'],
+      );
+
       await notifyTelegram(
-        `🔀 *Issue #${issue.number} — PR created*\n\n` +
+        `⚠️ *Issue #${issue.number} — PR created but merge failed*\n\n` +
         `*${issue.title}*\n` +
         `PR: ${pr.html_url}\n` +
-        `⚠️ Auto-merge failed — needs manual review`
+        (mergeFailIssue ? `🐛 Follow-up issue: #${mergeFailIssue.number}\n` : '') +
+        `\n_Auto-merge failed — new issue created_`
       );
       issue.status = 'in_progress';
       issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: false };
-      console.log(`   ⚠️  Issue #${issue.number} PR created but not merged — manual review needed`);
+      console.log(`   ⚠️  Issue #${issue.number} PR created but not merged — created follow-up issue`);
     }
 
     updateIssue(config.issuesDir, issue);
@@ -583,14 +744,55 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
   } catch (err: any) {
     console.error(`   ❌ Failed: ${err.message}`);
 
+    // Create a GitHub issue for the resolution failure
+    const errorMsg = err.message || 'Unknown error';
+    const resFailTitle = `[Resolution Failure]: Auto-resolver failed to fix #${issue.number} — ${issue.title}`;
+    const resFailBody = [
+      `## Summary`,
+      ``,
+      `The auto-resolver **failed** while attempting to fix issue #${issue.number}.`,
+      ``,
+      `## Original Issue`,
+      `- **Issue**: #${issue.number} — ${issue.title}`,
+      issue.body ? `- **Description**: ${issue.body.slice(0, 500)}` : '',
+      ``,
+      `## Error`,
+      `\`\`\``,
+      errorMsg.slice(0, 1000),
+      `\`\`\``,
+      ``,
+      `## Possible Causes`,
+      `- Claude Code could not generate a valid fix (max turns reached)`,
+      `- No code changes were produced (issue may already be fixed)`,
+      `- Git operations failed (worktree, commit, push)`,
+      `- GitHub API errors (rate limit, authentication)`,
+      ``,
+      `## What Needs to Happen`,
+      `1. Review the original issue #${issue.number}`,
+      `2. Manually fix the issue or provide more details in the issue description`,
+      `3. The auto-resolver will retry if the original issue remains \`pending\``,
+      ``,
+      `---`,
+      `*Auto-generated by QuickFinance Auto-Resolver*`,
+    ].join('\n');
+
+    const resFailIssue = await createGitHubIssue(
+      config.githubToken,
+      config.githubRepo,
+      resFailTitle,
+      resFailBody,
+      ['bug', 'resolution-failure', 'auto-resolver'],
+    );
+
     await notifyTelegram(
       `❌ *Issue #${issue.number} failed to resolve*\n\n` +
       `*${issue.title}*\n` +
-      `Error: ${err.message.slice(0, 200)}`
+      `Error: ${errorMsg.slice(0, 200)}` +
+      (resFailIssue ? `\n🐛 Follow-up issue: #${resFailIssue.number}` : '')
     );
 
     issue.status = 'pending';
-    issue.resolution = { error: err.message, resolvedAt: new Date().toISOString() };
+    issue.resolution = { error: errorMsg, resolvedAt: new Date().toISOString() };
     updateIssue(config.issuesDir, issue);
 
     if (worktreePath) {
