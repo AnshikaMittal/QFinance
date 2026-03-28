@@ -76,14 +76,17 @@ export function parseAppleCardPDF(lines: string[], cardId: string): CSVImportRes
     const line = lines[i]?.trim() ?? '';
     const lowerLine = line.toLowerCase();
 
-    // Section detection
-    if (lowerLine.includes('payments') || lowerLine.includes('payment received')) {
-      inPayments = true;
-      continue;
-    }
-    if (lowerLine.includes('transactions') || lowerLine.includes('purchases')) {
-      inPayments = false;
-      continue;
+    // Section detection (only match short header lines, not transaction lines)
+    const isTransactionLine = APPLE_DATE_LONG.test(line) || APPLE_DATE_SHORT.test(line) || APPLE_DATE_NOYEAR.test(line);
+    if (!isTransactionLine) {
+      if (lowerLine.includes('payments') || lowerLine === 'payment received') {
+        inPayments = true;
+        continue;
+      }
+      if (lowerLine.includes('transactions') || lowerLine === 'purchases') {
+        inPayments = false;
+        continue;
+      }
     }
 
     // Try to match transaction patterns

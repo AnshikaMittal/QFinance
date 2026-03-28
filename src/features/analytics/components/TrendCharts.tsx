@@ -61,8 +61,7 @@ export function TrendCharts() {
         const cat = categories.find(c => c.id === catId);
         return { name: cat?.name ?? 'Other', value: Math.round(amount), color: cat?.color ?? '#9ca3af' };
       })
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8);
+      .sort((a, b) => b.value - a.value);
   }, [debits, categories]);
 
   // Card comparison data
@@ -153,51 +152,48 @@ export function TrendCharts() {
         </div>
       </UICard>
 
-      {/* Category breakdown - Pie */}
-      {categoryData.length > 0 && (
-        <UICard>
-          <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">This Month by Category</h4>
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={categoryData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={80}
-                  paddingAngle={3}
-                  dataKey="value"
-                >
-                  {categoryData.map((entry, i) => (
-                    <Cell key={i} fill={entry.color} stroke="none" />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: isDark ? '#1f2937' : '#fff',
-                    border: 'none',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                    fontSize: '12px',
-                    color: isDark ? '#f3f4f6' : '#111827',
-                  }}
-                  formatter={(value: number) => formatCurrency(value)}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          {/* Legend */}
-          <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-2">
-            {categoryData.map((cat) => (
-              <div key={cat.name} className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
-                {cat.name}
-              </div>
-            ))}
-          </div>
-        </UICard>
-      )}
+      {/* Category breakdown — inline horizontal bars */}
+      {categoryData.length > 0 && (() => {
+        const totalCategorySpend = categoryData.reduce((s, c) => s + c.value, 0);
+        const maxValue = categoryData[0]?.value ?? 1;
+
+        return (
+          <UICard>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">This Month by Category</h4>
+              <span className="text-xs text-gray-400 tabular-nums">{formatCurrency(totalCategorySpend)} total</span>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              {categoryData.map((cat) => {
+                const pct = totalCategorySpend > 0 ? (cat.value / totalCategorySpend) * 100 : 0;
+                const barWidth = maxValue > 0 ? (cat.value / maxValue) * 100 : 0;
+                return (
+                  <div key={cat.name}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: cat.color }} />
+                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{cat.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-gray-400 tabular-nums">{pct.toFixed(0)}%</span>
+                        <span className="text-xs font-semibold text-gray-900 dark:text-white tabular-nums min-w-[60px] text-right">
+                          {formatCurrency(cat.value)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${barWidth}%`, backgroundColor: cat.color }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </UICard>
+        );
+      })()}
 
       {/* Card comparison bar chart */}
       {cardData.length > 1 && (

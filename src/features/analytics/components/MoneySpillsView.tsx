@@ -170,7 +170,7 @@ export function MoneySpillsView() {
                       Flagged transactions ({spillTxns.length})
                     </p>
                     <div className="flex flex-col gap-1">
-                      {spillTxns.slice(0, 10).map((t) => {
+                      {spillTxns.map((t) => {
                         const cat = categories.find(c => c.id === t.categoryId);
                         return (
                           <div
@@ -198,9 +198,6 @@ export function MoneySpillsView() {
                           </div>
                         );
                       })}
-                      {spillTxns.length > 10 && (
-                        <p className="text-xs text-gray-400 px-3 py-1">+{spillTxns.length - 10} more transactions</p>
-                      )}
                     </div>
                   </div>
                 )}

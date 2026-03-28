@@ -105,27 +105,68 @@ function SettingsPage() {
   const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) ?? [];
 
-  const importSummary = useCallback(() => {
-    if (!transactions.length) return { byCard: [] as { cardName: string; lastFour: string; color: string; count: number; total: number; sources: string[]; dateRange: string }[], totalTxns: 0, totalCards: 0 };
+  interface CardSummary {
+    cardId: string;
+    cardName: string;
+    lastFour: string;
+    color: string;
+    count: number;
+    total: number;
+    sources: string[];
+    dateRange: string;
+    monthsCovered: string[];   // e.g. ['Jan 2026', 'Feb 2026']
+    monthsMissing: string[];   // e.g. ['Mar 2026'] — gaps between first and last month
+  }
+
+  const importSummary = useCallback((): { byCard: CardSummary[]; totalTxns: number; totalCards: number } => {
+    if (!transactions.length) return { byCard: [], totalTxns: 0, totalCards: 0 };
 
     const cardMap = new Map(cards.map(c => [c.id, c]));
-    const byCardId = new Map<string, { count: number; total: number; sources: Set<string>; minDate: Date; maxDate: Date }>();
+    const byCardId = new Map<string, { count: number; total: number; sources: Set<string>; months: Set<string>; minDate: Date; maxDate: Date }>();
 
     for (const txn of transactions) {
-      const entry = byCardId.get(txn.cardId) ?? { count: 0, total: 0, sources: new Set<string>(), minDate: txn.date, maxDate: txn.date };
+      const entry = byCardId.get(txn.cardId) ?? { count: 0, total: 0, sources: new Set<string>(), months: new Set<string>(), minDate: txn.date, maxDate: txn.date };
       entry.count++;
       if (txn.type === 'debit') entry.total += txn.amount;
       entry.sources.add(txn.importSource);
+      // Track month key like "2026-01"
+      const monthKey = `${txn.date.getFullYear()}-${String(txn.date.getMonth() + 1).padStart(2, '0')}`;
+      entry.months.add(monthKey);
       if (txn.date < entry.minDate) entry.minDate = txn.date;
       if (txn.date > entry.maxDate) entry.maxDate = txn.date;
       byCardId.set(txn.cardId, entry);
     }
 
-    const byCard = Array.from(byCardId.entries()).map(([cardId, data]) => {
+    const fmtMonth = (key: string) => {
+      const [y, m] = key.split('-');
+      const d = new Date(parseInt(y!), parseInt(m!) - 1);
+      return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    };
+
+    const byCard: CardSummary[] = Array.from(byCardId.entries()).map(([cardId, data]) => {
       const card = cardMap.get(cardId);
       const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
       const dateRange = fmt(data.minDate) === fmt(data.maxDate) ? fmt(data.minDate) : `${fmt(data.minDate)} – ${fmt(data.maxDate)}`;
+
+      // Compute expected months between first and last date
+      const monthsCovered = Array.from(data.months).sort();
+      const monthsMissing: string[] = [];
+      if (monthsCovered.length >= 2) {
+        const startDate = data.minDate;
+        const endDate = data.maxDate;
+        const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+        const endMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+        while (cursor <= endMonth) {
+          const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+          if (!data.months.has(key)) {
+            monthsMissing.push(key);
+          }
+          cursor.setMonth(cursor.getMonth() + 1);
+        }
+      }
+
       return {
+        cardId,
         cardName: card ? card.name : 'Unknown Card',
         lastFour: card ? card.lastFour : '????',
         color: card?.color ?? '#6b7280',
@@ -133,6 +174,8 @@ function SettingsPage() {
         total: data.total,
         sources: Array.from(data.sources),
         dateRange,
+        monthsCovered: monthsCovered.map(fmtMonth),
+        monthsMissing: monthsMissing.map(fmtMonth),
       };
     }).sort((a, b) => b.count - a.count);
 
@@ -206,24 +249,24 @@ function SettingsPage() {
           await db.moneySpills.clear();
           await db.settings.clear();
 
-          const txns = data.transactions.map((t: any) => ({
+          const txns = data.transactions.map((t: Record<string, unknown>) => ({
             ...t,
-            date: new Date(t.date),
-            createdAt: new Date(t.createdAt),
-            updatedAt: t.updatedAt ? new Date(t.updatedAt) : undefined,
+            date: new Date(t.date as string),
+            createdAt: new Date(t.createdAt as string),
+            updatedAt: t.updatedAt ? new Date(t.updatedAt as string) : undefined,
           }));
-          const cats = data.categories.map((c: any) => ({
+          const cats = data.categories.map((c: Record<string, unknown>) => ({
             ...c,
-            createdAt: new Date(c.createdAt),
+            createdAt: new Date(c.createdAt as string),
           }));
 
           if (txns.length) await db.transactions.bulkAdd(txns);
           if (cats.length) await db.categories.bulkAdd(cats);
           if (data.cards?.length) await db.cards.bulkAdd(data.cards);
           if (data.budgets?.length) await db.budgets.bulkAdd(data.budgets);
-          if (data.moneySpills?.length) await db.moneySpills.bulkAdd(data.moneySpills.map((s: any) => ({
+          if (data.moneySpills?.length) await db.moneySpills.bulkAdd(data.moneySpills.map((s: Record<string, unknown>) => ({
             ...s,
-            detectedAt: new Date(s.detectedAt),
+            detectedAt: new Date(s.detectedAt as string),
           })));
           if (data.settings?.length) await db.settings.bulkAdd(data.settings);
         });
@@ -268,14 +311,14 @@ function SettingsPage() {
       {/* Cards section */}
       <CardManager />
 
-      {/* Import History */}
+      {/* Import History & Statement Coverage */}
       <div>
         <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Import History</h2>
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
           {summary.totalTxns === 0 ? (
             <p className="text-sm text-gray-500 dark:text-gray-400">No transactions imported yet. Go to Import to add your statements.</p>
           ) : (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-4">
               {/* Summary stats */}
               <div className="flex gap-4 pb-3 border-b border-gray-100 dark:border-gray-800">
                 <div>
@@ -288,27 +331,49 @@ function SettingsPage() {
                 </div>
               </div>
 
-              {/* Per-card breakdown */}
+              {/* Per-card breakdown with month coverage */}
               {summary.byCard.map((card) => (
-                <div key={card.lastFour + card.cardName} className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: card.color + '18' }}>
-                    <CreditCard size={16} style={{ color: card.color }} />
+                <div key={card.cardId} className="flex flex-col gap-2">
+                  {/* Card header */}
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: card.color + '18' }}>
+                      <CreditCard size={16} style={{ color: card.color }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                        {card.cardName} {card.lastFour && card.lastFour !== '0000' && <span className="text-gray-400 font-normal">••{card.lastFour}</span>}
+                      </p>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                        {card.count} transactions · ${card.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} spent
+                      </p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      {card.sources.map((s) => (
+                        <span key={s} className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 uppercase">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                      {card.cardName} <span className="text-gray-400 font-normal">••{card.lastFour}</span>
-                    </p>
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                      {card.count} transactions · ${card.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} spent · {card.dateRange}
-                    </p>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    {card.sources.map((s) => (
-                      <span key={s} className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 uppercase">
-                        {s}
+
+                  {/* Month coverage chips */}
+                  <div className="ml-12 flex flex-wrap gap-1.5">
+                    {card.monthsCovered.map((m) => (
+                      <span key={m} className="px-2 py-0.5 text-[10px] font-medium rounded-md bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 border border-green-200/50 dark:border-green-800/40">
+                        {m}
+                      </span>
+                    ))}
+                    {card.monthsMissing.map((m) => (
+                      <span key={m} className="px-2 py-0.5 text-[10px] font-medium rounded-md bg-red-50 dark:bg-red-500/10 text-red-500 dark:text-red-400 border border-red-200/50 dark:border-red-800/40 border-dashed">
+                        {m}
                       </span>
                     ))}
                   </div>
+                  {card.monthsMissing.length > 0 && (
+                    <p className="ml-12 text-[10px] text-red-400 dark:text-red-500">
+                      {card.monthsMissing.length} month{card.monthsMissing.length > 1 ? 's' : ''} missing — upload statement{card.monthsMissing.length > 1 ? 's' : ''} for {card.monthsMissing.join(', ')}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

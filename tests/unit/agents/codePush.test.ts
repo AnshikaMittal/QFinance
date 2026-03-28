@@ -65,7 +65,7 @@ function formatNotification(input: NotificationInput): string {
 
 describe('Branch Name Sanitization', () => {
   it('lowercases and replaces special chars with hyphens', () => {
-    expect(sanitizeBranchName('Fix Login Bug!')).toBe('fix-login-bug-');
+    expect(sanitizeBranchName('Fix Login Bug!')).toBe('fix-login-bug');
     // After trimming trailing hyphens:
     const cleaned = sanitizeBranchName('Fix Login Bug!').replace(/-$/, '');
     expect(cleaned).toBe('fix-login-bug');

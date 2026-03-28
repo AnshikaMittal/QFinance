@@ -47,7 +47,7 @@ const SECURITY_PATTERNS: Array<{ pattern: RegExp; type: ScanResult['type']; seve
 
 // --- File scanning ---
 const SCAN_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.json', '.env', '.yml', '.yaml']);
-const IGNORE_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage']);
+const IGNORE_DIRS = new Set(['node_modules', 'dist', '.git', '.next', '.vite', 'coverage']);
 const IGNORE_FILES = new Set([
   '.env.example',
   'scanner.ts',   // Don't flag our own patterns

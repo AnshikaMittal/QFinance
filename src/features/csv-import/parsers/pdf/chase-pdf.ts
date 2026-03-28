@@ -75,17 +75,19 @@ export function parseChasePDF(lines: string[], cardId: string): CSVImportResult 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]?.trim() ?? '';
 
-    // Detect section headers
+    // Detect section headers (only match short header-like lines, not transaction lines)
     const lowerLine = line.toLowerCase();
-    if (lowerLine.includes('payment') && lowerLine.includes('credit') ||
-        lowerLine === 'payments and other credits') {
-      inPayments = true;
-      continue;
-    }
-    if (lowerLine.includes('purchase') || lowerLine === 'purchases' ||
-        lowerLine.includes('transaction') && lowerLine.includes('detail')) {
-      inPayments = false;
-      continue;
+    if (!TRANSACTION_LINE.test(line) && !SINGLE_DATE_LINE.test(line)) {
+      if (lowerLine.includes('payment') && lowerLine.includes('credit') ||
+          lowerLine === 'payments and other credits') {
+        inPayments = true;
+        continue;
+      }
+      if (lowerLine === 'purchases' || lowerLine === 'purchase' ||
+          lowerLine.includes('transaction') && lowerLine.includes('detail')) {
+        inPayments = false;
+        continue;
+      }
     }
 
     // Try to match transaction lines

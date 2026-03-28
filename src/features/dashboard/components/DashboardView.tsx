@@ -228,7 +228,7 @@ function MoneySpillsSummary({ transactions, categories }: { transactions: Transa
       </div>
 
       <div className="flex flex-col gap-2">
-        {spills.slice(0, 5).map((spill) => {
+        {spills.map((spill) => {
           const color = SPILL_COLORS[spill.type] ?? '#ef4444';
           const label = SPILL_LABELS[spill.type] ?? 'Issue';
           const explanation = SPILL_EXPLANATIONS[spill.type] ?? '';
@@ -283,7 +283,7 @@ function MoneySpillsSummary({ transactions, categories }: { transactions: Transa
                         Related transactions ({spillTxns.length})
                       </p>
                       <div className="flex flex-col gap-1">
-                        {spillTxns.slice(0, 8).map((t) => {
+                        {spillTxns.map((t) => {
                           const cat = categories.find(c => c.id === t.categoryId);
                           return (
                             <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-gray-50 dark:bg-gray-800/30">
@@ -305,9 +305,6 @@ function MoneySpillsSummary({ transactions, categories }: { transactions: Transa
                             </div>
                           );
                         })}
-                        {spillTxns.length > 8 && (
-                          <p className="text-xs text-gray-400 px-2 py-1">+{spillTxns.length - 8} more</p>
-                        )}
                       </div>
                     </div>
                   )}
@@ -403,8 +400,7 @@ export function DashboardView() {
         const amount = txns.reduce((sum, t) => sum + t.amount, 0);
         return { catId, name: cat?.name ?? 'Other', color: cat?.color ?? '#6b7280', amount, transactions: txns };
       })
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, 6);
+      .sort((a, b) => b.amount - a.amount);
 
     return { totalSpent, totalIncome, topCategories, txnCount: transactions.length };
   }, [transactions, categories]);

@@ -25,6 +25,7 @@ export function detectMoneySpills(
   transactions: Transaction[],
   existingSpills: MoneySpill[],
   config: Partial<DetectionConfig> = {},
+  categoryNames: Record<string, string> = {},
 ): MoneySpill[] {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const dismissedIds = new Set(existingSpills.filter(s => s.isDismissed).map(s => s.id));
@@ -39,7 +40,7 @@ export function detectMoneySpills(
   spills.push(...detectForgottenSubscriptions(debits, cfg));
 
   // 3. Spending creep - categories where spending is trending up significantly
-  spills.push(...detectSpendingCreep(debits, cfg));
+  spills.push(...detectSpendingCreep(debits, cfg, categoryNames));
 
   // 4. Impulse spending - late night or weekend spending patterns
   spills.push(...detectImpulseSpending(debits, cfg));
@@ -148,7 +149,7 @@ function detectForgottenSubscriptions(debits: Transaction[], cfg: DetectionConfi
   return spills;
 }
 
-function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig): MoneySpill[] {
+function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, categoryNames: Record<string, string> = {}): MoneySpill[] {
   const spills: MoneySpill[] = [];
   const now = new Date();
 
@@ -177,7 +178,7 @@ function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig): Money
       spills.push({
         id: uuidv4(),
         type: 'spending-creep',
-        description: `Spending up ${Math.round(increase * 100)}% in this category — ${formatAmount(currentAmount)} this month vs ${formatAmount(monthlyAvg)}/mo average`,
+        description: `Spending up ${Math.round(increase * 100)}% in ${categoryNames[categoryId] || 'this category'} — ${formatAmount(currentAmount)} this month vs ${formatAmount(monthlyAvg)}/mo average`,
         transactions: txns.map(t => t.id),
         estimatedWaste: currentAmount - monthlyAvg,
         period: 'This month vs 3-month avg',

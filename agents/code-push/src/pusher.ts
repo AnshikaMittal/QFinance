@@ -102,7 +102,8 @@ function stageAll(cwd: string): void {
 }
 
 function commit(cwd: string, message: string): string {
-  git(cwd, 'commit', '-m', message);
+  // Quote the message to handle spaces — git() joins args with spaces into a shell string
+  git(cwd, 'commit', '-m', `"${message.replace(/"/g, '\\"')}"`);
   return git(cwd, 'rev-parse', '--short', 'HEAD');
 }
 

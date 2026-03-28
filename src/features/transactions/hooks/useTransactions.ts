@@ -5,7 +5,7 @@ import type { Transaction } from '../../../core/types';
 
 export function useTransactions(options?: { limit?: number; cardId?: string; categoryId?: string }) {
   const transactions = useLiveQuery(async () => {
-    let query = db.transactions.orderBy('date').reverse();
+    const query = db.transactions.orderBy('date').reverse();
 
     const all = await query.toArray();
 

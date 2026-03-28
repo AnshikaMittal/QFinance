@@ -10,13 +10,18 @@ export function useMoneySpills() {
 
   const transactions = useLiveQuery(() => db.transactions.toArray()) ?? [];
   const existingSpills = useLiveQuery(() => db.moneySpills.toArray()) ?? [];
+  const categories = useLiveQuery(() => db.categories.toArray()) ?? [];
 
   const runDetection = useCallback(async () => {
     if (transactions.length === 0) return;
 
     setIsAnalyzing(true);
     try {
-      const detected = detectMoneySpills(transactions, existingSpills);
+      const categoryNames: Record<string, string> = {};
+      for (const cat of categories) {
+        categoryNames[cat.id] = cat.name;
+      }
+      const detected = detectMoneySpills(transactions, existingSpills, {}, categoryNames);
 
       // Merge with existing — keep dismissed state
       const dismissedIds = new Set(existingSpills.filter(s => s.isDismissed).map(s => s.id));
@@ -26,7 +31,7 @@ export function useMoneySpills() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [transactions, existingSpills]);
+  }, [transactions, existingSpills, categories]);
 
   useEffect(() => {
     runDetection();

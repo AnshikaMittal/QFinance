@@ -60,6 +60,12 @@ const DEFAULT_CATEGORIES: Omit<Category, 'id' | 'createdAt'>[] = [
     // ── Grocery delivery ──
     'instacart', 'amazon fresh', 'fresh direct', 'peapod',
     'shipt', 'walmart grocery', 'target grocery', 'costco delivery',
+    // DoorDash / Uber Eats grocery orders (longer match beats generic "doordash" in Dining)
+    'doordash safeway', 'doordash kroger', 'doordash albertsons', 'doordash whole foods',
+    'doordash walmart', 'doordash costco', 'doordash target', 'doordash heb',
+    'doordash publix', 'doordash meijer', 'doordash aldi', 'doordash sprouts',
+    'doordash grocery', 'dd grocery', 'uber eats grocery',
+    'grubhub grocery', 'dashpass grocery',
 
     // ── Wholesale / Club ──
     'bj\'s wholesale', 'bjs wholesale', 'restaurant depot',
