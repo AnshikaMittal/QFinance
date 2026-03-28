@@ -211,7 +211,34 @@ async function createPullRequest(
 }
 
 // --- Claude Integration ---
+function findClaudeBinary(): string {
+  // Try common locations for claude CLI
+  const candidates = [
+    'claude',                                          // global PATH
+    `${process.env.HOME}/.claude/bin/claude`,           // default install location
+    `${process.env.HOME}/.npm-global/bin/claude`,       // npm global
+    '/usr/local/bin/claude',                            // system-wide
+  ];
+
+  for (const bin of candidates) {
+    try {
+      execSync(`${bin} --version`, { stdio: 'pipe', encoding: 'utf-8' });
+      return bin;
+    } catch { /* not here, try next */ }
+  }
+
+  // Fall back to npx (downloads if needed, always works)
+  return 'npx -y @anthropic-ai/claude-code';
+}
+
+let claudeBin: string | null = null;
+
 function invokeClaudeCode(projectDir: string, module: string, issue: LocalIssue): boolean {
+  if (!claudeBin) {
+    claudeBin = findClaudeBinary();
+    console.log(`   🔍 Using Claude CLI: ${claudeBin}`);
+  }
+
   const prompt = [
     `Fix the following issue in the QuickFinance project.`,
     `Only modify files within the "${module}" directory.`,
@@ -229,21 +256,27 @@ function invokeClaudeCode(projectDir: string, module: string, issue: LocalIssue)
     `- Use TypeScript strict mode (noUncheckedIndexedAccess is enabled)`,
   ].join('\n');
 
+  // Write prompt to a temp file to avoid shell escaping issues
+  const promptFile = join(projectDir, '.claude-prompt.tmp');
+  writeFileSync(promptFile, prompt, 'utf-8');
+
   try {
-    // Use claude code CLI to apply the fix
     execSync(
-      `claude -p "${prompt.replace(/"/g, '\\"')}" --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20`,
+      `cat "${promptFile}" | ${claudeBin} -p --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20`,
       {
         cwd: projectDir,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 300000, // 5 minute timeout
+        env: { ...process.env, PATH: `${process.env.HOME}/.claude/bin:${process.env.PATH}` },
       },
     );
     return true;
   } catch (err: any) {
     console.error(`Claude Code error: ${err.message}`);
     return false;
+  } finally {
+    try { execSync(`rm -f "${promptFile}"`, { stdio: 'pipe' }); } catch { /* ignore */ }
   }
 }
 
