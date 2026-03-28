@@ -261,19 +261,30 @@ function invokeClaudeCode(projectDir: string, module: string, issue: LocalIssue)
   writeFileSync(promptFile, prompt, 'utf-8');
 
   try {
-    execSync(
-      `cat "${promptFile}" | ${claudeBin} -p --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20`,
+    // Use --print flag with stdin from file, inherit stderr so we see errors
+    const result = execSync(
+      `${claudeBin} --print --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20 < "${promptFile}"`,
       {
         cwd: projectDir,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 300000, // 5 minute timeout
-        env: { ...process.env, PATH: `${process.env.HOME}/.claude/bin:${process.env.PATH}` },
+        shell: '/bin/bash',
+        env: {
+          ...process.env,
+          PATH: `${process.env.HOME}/.claude/bin:${process.env.HOME}/.npm-global/bin:/usr/local/bin:${process.env.PATH}`,
+        },
       },
     );
+    console.log(`   📝 Claude output: ${result.slice(0, 200)}...`);
     return true;
   } catch (err: any) {
-    console.error(`Claude Code error: ${err.message}`);
+    // Show the actual error, not just "Command failed"
+    const stderr = err.stderr ? String(err.stderr).trim() : '';
+    const stdout = err.stdout ? String(err.stdout).trim() : '';
+    console.error(`   Claude Code stderr: ${stderr || '(none)'}`);
+    console.error(`   Claude Code stdout: ${stdout.slice(0, 300) || '(none)'}`);
+    console.error(`   Claude Code exit code: ${err.status}`);
     return false;
   } finally {
     try { execSync(`rm -f "${promptFile}"`, { stdio: 'pipe' }); } catch { /* ignore */ }
