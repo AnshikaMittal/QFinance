@@ -451,6 +451,30 @@ async function getMergeCommitSha(
 }
 
 // --- Delete Remote Branch ---
+async function closeGitHubIssue(
+  githubToken: string,
+  repo: string,
+  issueNumber: number,
+): Promise<boolean> {
+  const res = await fetch(`https://api.github.com/repos/${repo}/issues/${issueNumber}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${githubToken}`,
+      Accept: 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ state: 'closed', state_reason: 'completed' }),
+  });
+
+  if (!res.ok) {
+    console.log(`   ⚠️  Failed to close issue #${issueNumber} on GitHub (${res.status}): ${await res.text()}`);
+    return false;
+  }
+
+  console.log(`   ✅ Issue #${issueNumber} closed on GitHub`);
+  return true;
+}
+
 async function deleteRemoteBranch(githubToken: string, repo: string, branch: string): Promise<void> {
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${branch}`, {
@@ -543,7 +567,12 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
       }
     }
 
-    // 8. Update issue status — only "resolved" once deployment succeeds
+    // 8. Close the GitHub issue explicitly (squash merges may not trigger auto-close from PR body)
+    if (merged) {
+      await closeGitHubIssue(config.githubToken, config.githubRepo, issue.number);
+    }
+
+    // 9. Update issue status — only "resolved" once deployment succeeds
     if (deployed) {
       issue.status = 'resolved';
       issue.resolution = {
@@ -578,7 +607,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     updateIssue(config.issuesDir, issue);
     console.log(`   ✅ Done — moving to next issue\n`);
 
-    // 9. Worktree cleanup in background — never blocks the pipeline
+    // 10. Worktree cleanup in background — never blocks the pipeline
     if (worktreePath) {
       removeWorktreeAsync(config.projectDir, worktreePath);
       worktreePath = ''; // prevent finally block from doing sync cleanup
