@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Receipt, PieChart, Upload, Settings, Wallet, Moon, Sun, Plus, Download, UploadCloud, Trash2, AlertTriangle, CreditCard, Bell, Check } from 'lucide-react';
+import { BrowserRouter, Routes, Route, NavLink, Link, useLocation } from 'react-router-dom';
+import { LayoutDashboard, Receipt, PieChart, Upload, Settings, Wallet, Moon, Sun, Plus, Download, UploadCloud, Trash2, AlertTriangle, CreditCard, Bell, Check, Shield, ChevronRight } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ThemeProvider, useTheme } from './core/hooks';
 import { ToastProvider, useToast, Button } from './ui';
@@ -587,6 +587,100 @@ function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Privacy Policy link */}
+      <Link
+        to="/privacy"
+        className="flex items-center justify-between bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gray-500/10 flex items-center justify-center shrink-0">
+            <Shield size={18} className="text-gray-500" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-900 dark:text-white">Privacy Policy</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">How your data is handled</p>
+          </div>
+        </div>
+        <ChevronRight size={16} className="text-gray-400" />
+      </Link>
+    </div>
+  );
+}
+
+function PrivacyPolicyPage() {
+  return (
+    <div className="p-4 animate-fade-in">
+      <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Privacy Policy</h1>
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5 flex flex-col gap-5 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+        <p className="text-xs text-gray-400 dark:text-gray-500">Last updated: March 2026</p>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Overview</h2>
+          <p>
+            QuickFinance is a personal finance tracker that runs entirely in your browser.
+            Your privacy is important to us, and we have designed the app to keep your data under your control.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Data Storage</h2>
+          <p>
+            All financial data — transactions, cards, budgets, and categories — is stored locally on your
+            device using IndexedDB. <strong>No data is sent to or stored on any external server</strong> unless
+            you explicitly configure an integration (e.g., Telegram notifications).
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Telegram Notifications</h2>
+          <p>
+            If you choose to enable Telegram notifications, your Telegram Chat ID is stored locally and used
+            solely to send you deployment notifications via the Telegram Bot API. No message content or
+            financial data is shared through this channel.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">CSV Imports</h2>
+          <p>
+            When you import bank or credit card statements, the files are processed entirely in your browser.
+            The raw files are not uploaded anywhere and are discarded after parsing.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Analytics &amp; Tracking</h2>
+          <p>
+            QuickFinance does not use cookies, analytics services, or any third-party tracking.
+            We do not collect usage data, IP addresses, or device information.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Data Export &amp; Deletion</h2>
+          <p>
+            You can export all your data at any time from Settings. You can also clear all data permanently
+            from the Settings page. Since data is stored only on your device, clearing it removes it completely.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Third-Party Services</h2>
+          <p>
+            QuickFinance is hosted on GitHub Pages. GitHub Pages may collect basic server logs
+            (IP addresses, browser type) as described in GitHub's own privacy policy. QuickFinance itself
+            does not control or access this data.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Changes to This Policy</h2>
+          <p>
+            If we make changes to this privacy policy, we will update this page with the new effective date.
+          </p>
+        </section>
+      </div>
     </div>
   );
 }
@@ -664,6 +758,7 @@ function AppContent() {
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/import" element={<ImportPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/privacy" element={<PrivacyPolicyPage />} />
           </Routes>
         </main>
 
