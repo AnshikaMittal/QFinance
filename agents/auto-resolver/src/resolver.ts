@@ -446,14 +446,61 @@ async function closeGitHubIssue(
   return true;
 }
 
-// --- Create GitHub Issue for Failures ---
+// --- Failure Tracking (dedup: max 1 issue per original issue per failure type) ---
+// Key: "issueNumber:failureType" → number of times we've created an issue for this
+const failureIssueTracker = new Map<string, number>();
+const MAX_FAILURE_ISSUES = 1; // Only create 1 GitHub issue per original issue per failure type
+
+/**
+ * Check if an open issue already exists on GitHub for this failure.
+ * Searches by title prefix to avoid duplicates across restarts.
+ */
+async function hasExistingFailureIssue(
+  githubToken: string,
+  repo: string,
+  searchPrefix: string,
+): Promise<boolean> {
+  try {
+    const query = encodeURIComponent(`repo:${repo} is:issue is:open in:title "${searchPrefix}"`);
+    const res = await fetch(
+      `https://api.github.com/search/issues?q=${query}&per_page=1`,
+      { headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' } },
+    );
+    if (!res.ok) return false;
+    const data = (await res.json()) as { total_count: number };
+    return data.total_count > 0;
+  } catch {
+    return false; // If search fails, allow creation (better to have a dupe than miss a failure)
+  }
+}
+
+// --- Create GitHub Issue for Failures (with dedup) ---
 async function createGitHubIssue(
   githubToken: string,
   repo: string,
   title: string,
   body: string,
   labels: string[] = ['bug', 'auto-resolver'],
+  dedupKey?: string,
 ): Promise<{ number: number; html_url: string } | null> {
+  // Check local tracker first
+  if (dedupKey) {
+    const count = failureIssueTracker.get(dedupKey) ?? 0;
+    if (count >= MAX_FAILURE_ISSUES) {
+      console.log(`   ⏭️  Skipping issue creation — already created ${count} failure issue(s) for "${dedupKey}"`);
+      return null;
+    }
+  }
+
+  // Check GitHub for existing open issue with similar title
+  const titlePrefix = title.split(' — ')[0] ?? title.slice(0, 60);
+  const exists = await hasExistingFailureIssue(githubToken, repo, titlePrefix);
+  if (exists) {
+    console.log(`   ⏭️  Skipping issue creation — open issue already exists for "${titlePrefix}"`);
+    if (dedupKey) failureIssueTracker.set(dedupKey, MAX_FAILURE_ISSUES); // Sync local tracker
+    return null;
+  }
+
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
       method: 'POST',
@@ -472,6 +519,12 @@ async function createGitHubIssue(
 
     const issue = (await res.json()) as { number: number; html_url: string };
     console.log(`   📋 Created issue #${issue.number}: ${issue.html_url}`);
+
+    // Track locally
+    if (dedupKey) {
+      failureIssueTracker.set(dedupKey, (failureIssueTracker.get(dedupKey) ?? 0) + 1);
+    }
+
     return issue;
   } catch (err: any) {
     console.error(`   ⚠️  Failed to create issue: ${err.message}`);
@@ -672,6 +725,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
           failureIssueTitle,
           failureIssueBody,
           ['bug', 'deployment-failure', 'auto-resolver'],
+          `${issue.number}:deployment`,
         );
 
         await notifyTelegram(
@@ -718,6 +772,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
         mergeFailTitle,
         mergeFailBody,
         ['bug', 'merge-failure', 'auto-resolver'],
+        `${issue.number}:merge`,
       );
 
       await notifyTelegram(
@@ -782,6 +837,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
       resFailTitle,
       resFailBody,
       ['bug', 'resolution-failure', 'auto-resolver'],
+      `${issue.number}:resolution`,
     );
 
     await notifyTelegram(
