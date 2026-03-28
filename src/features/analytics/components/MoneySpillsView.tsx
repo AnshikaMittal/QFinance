@@ -1,14 +1,15 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   AlertTriangle, X, RefreshCw, Flame, Copy, Repeat,
-  TrendingUp, Moon, ChevronDown, ChevronUp,
+  TrendingUp, Moon, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  Shield, CheckCircle, ThumbsUp,
 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Card as UICard, Button, Badge, EmptyState } from '../../../ui';
 import { useMoneySpills } from '../hooks/useMoneySpills';
 import { formatCurrency } from '../../../core/utils';
 import { db } from '../../../core/db';
-import type { Transaction } from '../../../core/types';
+import type { Transaction, SpillResolution } from '../../../core/types';
 
 const SPILL_ICONS: Record<string, typeof AlertTriangle> = {
   duplicate: Copy,
@@ -45,22 +46,84 @@ const SPILL_TIPS: Record<string, string> = {
   impulse: 'Tip: Add items to a wishlist instead of buying immediately, then review after 24 hours.',
 };
 
+const RESOLUTION_CONFIG: Record<SpillResolution, { label: string; color: string; bgColor: string }> = {
+  unresolved: { label: 'Unresolved', color: '#ef4444', bgColor: 'bg-red-50 dark:bg-red-500/10' },
+  disputed: { label: 'Disputed', color: '#f59e0b', bgColor: 'bg-amber-50 dark:bg-amber-500/10' },
+  resolved: { label: 'Resolved', color: '#22c55e', bgColor: 'bg-green-50 dark:bg-green-500/10' },
+  legitimate: { label: 'Legitimate', color: '#6b7280', bgColor: 'bg-gray-50 dark:bg-gray-500/10' },
+};
+
 function formatDate(date: Date): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function formatMonthLabel(year: number, month: number): string {
+  const d = new Date(year, month, 1);
+  const now = new Date();
+  const label = d.toLocaleDateString('en-US', { month: 'long' });
+  if (year !== now.getFullYear()) return `${label} ${year}`;
+  return label;
+}
+
 export function MoneySpillsView() {
-  const { spills, totalWaste, isAnalyzing, dismissSpill, runDetection } = useMoneySpills();
+  const allTransactions = useLiveQuery(() => db.transactions.toArray()) ?? [];
+
+  // Month navigation — default to the latest month with data
+  const latestMonth = useMemo(() => {
+    if (allTransactions.length === 0) {
+      const now = new Date();
+      return { year: now.getFullYear(), month: now.getMonth() };
+    }
+    const sorted = [...allTransactions].sort((a, b) => b.date.getTime() - a.date.getTime());
+    const latest = sorted[0]!.date;
+    return { year: latest.getFullYear(), month: latest.getMonth() };
+  }, [allTransactions]);
+
+  const [selectedYear, setSelectedYear] = useState<number | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (selectedYear === null) setSelectedYear(latestMonth.year);
+    if (selectedMonth === null) setSelectedMonth(latestMonth.month);
+  }, [latestMonth, selectedYear, selectedMonth]);
+
+  const year = selectedYear ?? latestMonth.year;
+  const month = selectedMonth ?? latestMonth.month;
+
+  const navigateMonth = useCallback((dir: -1 | 1) => {
+    let newMonth = month + dir;
+    let newYear = year;
+    if (newMonth < 0) { newMonth = 11; newYear -= 1; }
+    if (newMonth > 11) { newMonth = 0; newYear += 1; }
+    setSelectedYear(newYear);
+    setSelectedMonth(newMonth);
+  }, [year, month]);
+
+  const isCurrentMonth = (() => {
+    const now = new Date();
+    return year === now.getFullYear() && month === now.getMonth();
+  })();
+
+  const { spills, totalWaste, isAnalyzing, dismissSpill, resolveSpill, runDetection } = useMoneySpills({
+    month: { year, month },
+  });
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const transactions = useLiveQuery(() => db.transactions.toArray()) ?? [];
+  const transactions = allTransactions;
   const categories = useLiveQuery(() => db.categories.toArray()) ?? [];
+  const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
 
   const txnMap = useMemo(() => {
     const map = new Map<string, Transaction>();
     transactions.forEach(t => map.set(t.id, t));
     return map;
   }, [transactions]);
+
+  const cardMap = useMemo(() => {
+    const map = new Map<string, { name: string; lastFour: string; color: string }>();
+    cards.forEach(c => map.set(c.id, { name: c.name, lastFour: c.lastFour, color: c.color }));
+    return map;
+  }, [cards]);
 
   if (spills.length === 0 && !isAnalyzing) {
     return (
@@ -74,6 +137,34 @@ export function MoneySpillsView() {
 
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
+      {/* Month navigation */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigateMonth(-1)}
+            className="p-1 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+            aria-label="Previous month"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white min-w-[140px] text-center">
+            {formatMonthLabel(year, month)}
+          </h2>
+          <button
+            onClick={() => navigateMonth(1)}
+            disabled={isCurrentMonth}
+            className={`p-1 rounded-lg transition-colors ${
+              isCurrentMonth
+                ? 'text-gray-600 cursor-not-allowed'
+                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+            }`}
+            aria-label="Next month"
+          >
+            <ChevronRight size={20} />
+          </button>
+        </div>
+      </div>
+
       {/* Summary card */}
       <UICard className="bg-gradient-to-br from-red-50 to-orange-50 dark:from-red-500/5 dark:to-orange-500/5 border-red-200/50 dark:border-red-500/20">
         <div className="flex items-center justify-between">
@@ -88,7 +179,7 @@ export function MoneySpillsView() {
               {formatCurrency(totalWaste)}
             </p>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              potential savings from {spills.length} issue{spills.length !== 1 ? 's' : ''}
+              potential savings from {spills.length} issue{spills.length !== 1 ? 's' : ''} in {formatMonthLabel(year, month)}
             </p>
           </div>
           <Button
@@ -172,6 +263,7 @@ export function MoneySpillsView() {
                     <div className="flex flex-col gap-1">
                       {spillTxns.map((t) => {
                         const cat = categories.find(c => c.id === t.categoryId);
+                        const card = cardMap.get(t.cardId);
                         return (
                           <div
                             key={t.id}
@@ -187,7 +279,18 @@ export function MoneySpillsView() {
                               <p className="text-xs text-gray-700 dark:text-gray-300 truncate">
                                 {t.merchant || t.description}
                               </p>
-                              <p className="text-[10px] text-gray-400">{cat?.name ?? 'Other'}</p>
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-[10px] text-gray-400">{cat?.name ?? 'Other'}</p>
+                                {card && (
+                                  <>
+                                    <span className="text-[10px] text-gray-300 dark:text-gray-600">·</span>
+                                    <span className="text-[10px] text-gray-400 flex items-center gap-0.5">
+                                      <span className="inline-block w-1.5 h-1.5 rounded-sm" style={{ backgroundColor: card.color }} />
+                                      {card.name}{card.lastFour && card.lastFour !== '0000' ? ` ••${card.lastFour}` : ''}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
                             </div>
                             <span className="text-[11px] text-gray-400 tabular-nums shrink-0">
                               {formatDate(t.date)}
@@ -202,13 +305,71 @@ export function MoneySpillsView() {
                   </div>
                 )}
 
-                {/* Dismiss button */}
-                <button
-                  onClick={(e) => { e.stopPropagation(); dismissSpill(spill.id); }}
-                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors mt-1"
-                >
-                  <X size={12} /> Dismiss this spill
-                </button>
+                {/* Resolution status & actions */}
+                <div className="mt-2">
+                  {/* Current status badge */}
+                  {spill.resolution && spill.resolution !== 'unresolved' && (
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium mb-3 ${RESOLUTION_CONFIG[spill.resolution].bgColor}`}
+                      style={{ color: RESOLUTION_CONFIG[spill.resolution].color }}
+                    >
+                      {spill.resolution === 'disputed' && <Shield size={12} />}
+                      {spill.resolution === 'resolved' && <CheckCircle size={12} />}
+                      {spill.resolution === 'legitimate' && <ThumbsUp size={12} />}
+                      {RESOLUTION_CONFIG[spill.resolution].label}
+                      {spill.resolvedAt && (
+                        <span className="opacity-60 ml-1">
+                          · {spill.resolvedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {spill.type === 'duplicate' && (
+                      <>
+                        {spill.resolution !== 'disputed' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); resolveSpill(spill.id, 'disputed'); }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20 transition-colors"
+                          >
+                            <Shield size={12} /> Mark Disputed
+                          </button>
+                        )}
+                        {spill.resolution !== 'resolved' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); resolveSpill(spill.id, 'resolved'); }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 transition-colors"
+                          >
+                            <CheckCircle size={12} /> Mark Resolved
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {spill.resolution !== 'legitimate' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); resolveSpill(spill.id, 'legitimate'); }}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        <ThumbsUp size={12} /> Legitimate
+                      </button>
+                    )}
+                    {spill.resolution !== 'unresolved' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); resolveSpill(spill.id, 'unresolved'); }}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                      >
+                        Undo
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); dismissSpill(spill.id); }}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors ml-auto"
+                    >
+                      <X size={12} /> Dismiss
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </UICard>

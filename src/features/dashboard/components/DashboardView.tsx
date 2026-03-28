@@ -186,6 +186,7 @@ function CategoryRow({ name, color, amount, totalSpent, transactions, onTransact
 function MoneySpillsSummary({ transactions, categories }: { transactions: Transaction[]; categories: Category[] }) {
   const { spills, totalWaste } = useMoneySpills();
   const [expandedSpill, setExpandedSpill] = useState<string | null>(null);
+  const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
 
   // All hooks MUST be called before any early return (Rules of Hooks)
   const txnMap = useMemo(() => {
@@ -193,6 +194,12 @@ function MoneySpillsSummary({ transactions, categories }: { transactions: Transa
     transactions.forEach(t => map.set(t.id, t));
     return map;
   }, [transactions]);
+
+  const cardMap = useMemo(() => {
+    const map = new Map<string, { name: string; lastFour: string; color: string }>();
+    cards.forEach(c => map.set(c.id, { name: c.name, lastFour: c.lastFour, color: c.color }));
+    return map;
+  }, [cards]);
 
   if (spills.length === 0) return null;
 
@@ -285,6 +292,7 @@ function MoneySpillsSummary({ transactions, categories }: { transactions: Transa
                       <div className="flex flex-col gap-1">
                         {spillTxns.map((t) => {
                           const cat = categories.find(c => c.id === t.categoryId);
+                          const card = cardMap.get(t.cardId);
                           return (
                             <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-gray-50 dark:bg-gray-800/30">
                               <div
@@ -297,6 +305,12 @@ function MoneySpillsSummary({ transactions, categories }: { transactions: Transa
                                 <p className="text-xs text-gray-700 dark:text-gray-300 truncate">
                                   {t.merchant || t.description}
                                 </p>
+                                {card && (
+                                  <p className="text-[10px] text-gray-400 flex items-center gap-0.5">
+                                    <span className="inline-block w-1.5 h-1.5 rounded-sm" style={{ backgroundColor: card.color }} />
+                                    {card.name}{card.lastFour && card.lastFour !== '0000' ? ` ••${card.lastFour}` : ''}
+                                  </p>
+                                )}
                               </div>
                               <span className="text-xs text-gray-400 tabular-nums">{formatDate(t.date)}</span>
                               <span className="text-xs font-semibold text-gray-900 dark:text-gray-100 tabular-nums">

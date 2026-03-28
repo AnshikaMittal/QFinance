@@ -26,24 +26,45 @@ export function detectMoneySpills(
   existingSpills: MoneySpill[],
   config: Partial<DetectionConfig> = {},
   categoryNames: Record<string, string> = {},
+  monthScope?: { year: number; month: number },
 ): MoneySpill[] {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const dismissedIds = new Set(existingSpills.filter(s => s.isDismissed).map(s => s.id));
-  const debits = transactions.filter(t => t.type === 'debit');
+
+  // If month-scoped, filter debits to that month for most detectors
+  const allDebits = transactions.filter(t => t.type === 'debit');
+  const scopedDebits = monthScope
+    ? allDebits.filter(t => t.date.getFullYear() === monthScope.year && t.date.getMonth() === monthScope.month)
+    : allDebits;
 
   const spills: MoneySpill[] = [];
 
   // 1. Duplicate detection - same amount at same/similar merchant within N days
-  spills.push(...detectDuplicates(debits, cfg));
+  spills.push(...detectDuplicates(scopedDebits, cfg));
 
-  // 2. Forgotten subscriptions - recurring charges user might not be aware of
-  spills.push(...detectForgottenSubscriptions(debits, cfg));
+  // 2. Forgotten subscriptions - uses all data to find patterns, but only shows subscriptions
+  //    that have charges in the scoped month
+  const subscriptionSpills = detectForgottenSubscriptions(allDebits, cfg);
+  if (monthScope) {
+    // Filter to only show subscription spills that have at least one charge in the selected month
+    const monthTxnIds = new Set(scopedDebits.map(t => t.id));
+    spills.push(...subscriptionSpills.filter(s =>
+      s.transactions.some(id => monthTxnIds.has(id))
+    ));
+  } else {
+    spills.push(...subscriptionSpills);
+  }
 
-  // 3. Spending creep - categories where spending is trending up significantly
-  spills.push(...detectSpendingCreep(debits, cfg, categoryNames));
+  // 3. Spending creep - needs all data for lookback, but reports on scoped month
+  //    Pass all debits so it can compute 3-month average, but it already compares current vs previous
+  if (monthScope) {
+    spills.push(...detectSpendingCreep(allDebits, cfg, categoryNames, monthScope));
+  } else {
+    spills.push(...detectSpendingCreep(allDebits, cfg, categoryNames));
+  }
 
   // 4. Impulse spending - late night or weekend spending patterns
-  spills.push(...detectImpulseSpending(debits, cfg));
+  spills.push(...detectImpulseSpending(scopedDebits, cfg));
 
   return spills;
 }
@@ -87,6 +108,7 @@ function detectDuplicates(debits: Transaction[], cfg: DetectionConfig): MoneySpi
         estimatedWaste: extraCharges.reduce((sum, t) => sum + t.amount, 0),
         period: `${daysBetween(duplicateGroup)} days`,
         isDismissed: false,
+        resolution: 'unresolved',
         detectedAt: new Date(),
       });
     }
@@ -141,6 +163,7 @@ function detectForgottenSubscriptions(debits: Transaction[], cfg: DetectionConfi
         estimatedWaste: monthlyAmount * 12,
         period: `${Math.round(avgInterval)} day cycle`,
         isDismissed: false,
+        resolution: 'unresolved',
         detectedAt: new Date(),
       });
     }
@@ -149,13 +172,19 @@ function detectForgottenSubscriptions(debits: Transaction[], cfg: DetectionConfi
   return spills;
 }
 
-function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, categoryNames: Record<string, string> = {}): MoneySpill[] {
+function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, categoryNames: Record<string, string> = {}, monthScope?: { year: number; month: number }): MoneySpill[] {
   const spills: MoneySpill[] = [];
-  const now = new Date();
 
-  // Compare current month vs average of previous 3 months by category
-  const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+  // If month-scoped, compare that month vs average of previous 3 months
+  // Otherwise compare current month vs previous 3 months
+  const refDate = monthScope
+    ? new Date(monthScope.year, monthScope.month, 1)
+    : new Date();
+
+  const currentMonth = monthScope
+    ? new Date(monthScope.year, monthScope.month, 1)
+    : new Date(refDate.getFullYear(), refDate.getMonth(), 1);
+  const threeMonthsAgo = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 3, 1);
 
   const current = debits.filter(t => t.date >= currentMonth);
   const previous = debits.filter(t => t.date >= threeMonthsAgo && t.date < currentMonth);
@@ -183,6 +212,7 @@ function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, catego
         estimatedWaste: currentAmount - monthlyAvg,
         period: 'This month vs 3-month avg',
         isDismissed: false,
+        resolution: 'unresolved',
         detectedAt: new Date(),
       });
     }
@@ -194,6 +224,12 @@ function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, catego
 function detectImpulseSpending(debits: Transaction[], cfg: DetectionConfig): MoneySpill[] {
   const lateNight = debits.filter(t => {
     const hour = t.date.getHours();
+    const minutes = t.date.getMinutes();
+    const seconds = t.date.getSeconds();
+
+    // Skip transactions with no real time data (imported from CSV/PDF default to midnight = 00:00:00)
+    if (hour === 0 && minutes === 0 && seconds === 0) return false;
+
     return (hour >= cfg.impulseHourStart || hour < cfg.impulseHourEnd) && t.amount >= cfg.impulseMinAmount;
   });
 
@@ -210,6 +246,7 @@ function detectImpulseSpending(debits: Transaction[], cfg: DetectionConfig): Mon
       estimatedWaste: total * 0.3, // estimate 30% of impulse buys are wasteful
       period: 'Last 30 days',
       isDismissed: false,
+      resolution: 'unresolved',
       detectedAt: new Date(),
     },
   ];

@@ -58,6 +58,8 @@ export interface Budget {
 }
 
 // Money Spill types
+export type SpillResolution = 'unresolved' | 'disputed' | 'resolved' | 'legitimate';
+
 export interface MoneySpill {
   id: string;
   type: 'duplicate' | 'subscription-forgotten' | 'spending-creep' | 'impulse';
@@ -66,6 +68,9 @@ export interface MoneySpill {
   estimatedWaste: number;
   period: string;
   isDismissed: boolean;
+  resolution: SpillResolution;
+  resolvedAt?: Date;
+  resolutionNote?: string;
   detectedAt: Date;
 }
 

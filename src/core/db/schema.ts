@@ -20,6 +20,22 @@ export class QuickFinanceDB extends Dexie {
       moneySpills: 'id, type, isDismissed, detectedAt',
       settings: 'id',
     });
+
+    // v2: Add resolution tracking to money spills
+    this.version(2).stores({
+      transactions: 'id, date, categoryId, cardId, type, isRecurring, importSource, merchant, [cardId+date], [categoryId+date]',
+      categories: 'id, name, parentId, isDefault',
+      cards: 'id, issuer, name',
+      budgets: 'id, categoryId, period, isActive',
+      moneySpills: 'id, type, isDismissed, detectedAt, resolution',
+      settings: 'id',
+    }).upgrade(tx => {
+      return tx.table('moneySpills').toCollection().modify(spill => {
+        if (!spill.resolution) {
+          spill.resolution = spill.isDismissed ? 'resolved' : 'unresolved';
+        }
+      });
+    });
   }
 }
 
