@@ -152,9 +152,23 @@ function git(projectDir: string, ...args: string[]): string {
 function createBranch(projectDir: string, issueNumber: number): string {
   const branchName = `auto-fix/issue-${issueNumber}`;
 
+  // Stash any local changes (e.g. issue JSON updates) before pulling
+  const dirty = git(projectDir, 'status', '--porcelain');
+  const stashed = dirty.length > 0;
+  if (stashed) {
+    git(projectDir, 'stash', '--include-untracked');
+  }
+
   // Ensure we're on main and up to date
   git(projectDir, 'checkout', 'main');
   git(projectDir, 'pull', 'origin', 'main', '--rebase');
+
+  // Restore stashed changes
+  if (stashed) {
+    try {
+      git(projectDir, 'stash', 'pop');
+    } catch { /* ignore conflicts — issue JSONs are local-only */ }
+  }
 
   // Create and switch to new branch
   try {

@@ -18,6 +18,9 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Agent runtime state (issue JSONs are local-only)
+agents/issue-poller/issues/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
