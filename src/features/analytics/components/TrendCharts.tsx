@@ -6,7 +6,7 @@ import { Card as UICard, EmptyState } from '../../../ui';
 import { formatCurrency } from '../../../core/utils';
 import { BarChart3, TrendingUp } from 'lucide-react';
 
-type TimeRange = '3m' | '6m' | '12m';
+type TimeRange = '1m' | '2m' | '3m' | '6m' | '12m';
 
 export function TrendCharts() {
   const [range, setRange] = useState<TimeRange>('3m');
@@ -19,7 +19,7 @@ export function TrendCharts() {
     [transactions],
   );
 
-  const monthsBack = range === '3m' ? 3 : range === '6m' ? 6 : 12;
+  const monthsBack = range === '1m' ? 1 : range === '2m' ? 2 : range === '3m' ? 3 : range === '6m' ? 6 : 12;
 
   // Monthly spending trend data
   const monthlyData = useMemo(() => {
@@ -97,7 +97,7 @@ export function TrendCharts() {
     <div className="flex flex-col gap-4 animate-fade-in">
       {/* Time range selector */}
       <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl w-fit">
-        {(['3m', '6m', '12m'] as TimeRange[]).map((r) => (
+        {(['1m', '2m', '3m', '6m', '12m'] as TimeRange[]).map((r) => (
           <button
             key={r}
             onClick={() => setRange(r)}
@@ -107,7 +107,7 @@ export function TrendCharts() {
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
             }`}
           >
-            {r === '3m' ? '3 Mo' : r === '6m' ? '6 Mo' : '1 Yr'}
+            {r === '12m' ? '1 Yr' : `${r.replace('m', '')} Mo`}
           </button>
         ))}
       </div>
