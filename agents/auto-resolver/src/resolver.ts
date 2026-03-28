@@ -18,7 +18,7 @@
  *   POLL_INTERVAL   — Check interval in seconds (default: 60)
  */
 
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -182,11 +182,21 @@ function createWorktree(projectDir: string, worktreeBase: string, branchName: st
   return worktreePath;
 }
 
-function removeWorktree(projectDir: string, worktreePath: string): void {
-  // Nuke node_modules first — rmSync on thousands of tiny files is glacially slow
+function removeWorktreeSync(projectDir: string, worktreePath: string): void {
   try { execSync(`rm -rf '${worktreePath}/node_modules'`, { stdio: 'pipe', timeout: 30000 }); } catch { /* ignore */ }
   try { shell(`git worktree remove --force '${worktreePath}'`, projectDir); } catch { /* ignore */ }
   try { rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+/** Fire-and-forget worktree cleanup — spawns a detached child process so we never block */
+function removeWorktreeAsync(projectDir: string, worktreePath: string): void {
+  const script = `rm -rf '${worktreePath}/node_modules' && git -C '${projectDir}' worktree remove --force '${worktreePath}' 2>/dev/null; rm -rf '${worktreePath}' 2>/dev/null`;
+  const child = spawn('bash', ['-c', script], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  child.unref();
+  console.log('   🧹 Worktree cleanup spawned in background');
 }
 
 // --- Claude Integration ---
@@ -410,7 +420,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     shell(`git push -u origin '${branchName}'`, worktreePath);
     console.log(`   📤 Pushed to ${branchName}`);
 
-    // 5. Create PR
+    // 5. Create PR + auto-merge (run in parallel with branch cleanup later)
     const prTitle = `fix: resolve #${issue.number} - ${issue.title}`;
     const prBody = [
       `## Auto-Resolved Issue`,
@@ -430,10 +440,12 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     // 6. Auto-merge the PR
     const merged = await mergePullRequest(config.githubToken, config.githubRepo, pr.number);
     if (merged) {
-      await deleteRemoteBranch(config.githubToken, config.githubRepo, branchName);
+      console.log(`   🎉 Issue #${issue.number} fully resolved and merged to main`);
+      // Fire-and-forget: delete remote branch, don't await
+      deleteRemoteBranch(config.githubToken, config.githubRepo, branchName).catch(() => {});
     }
 
-    // 7. Update issue status
+    // 7. Update issue status — this is the "done" signal, log it prominently
     issue.status = 'resolved';
     issue.resolution = {
       prNumber: pr.number,
@@ -442,6 +454,13 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
       autoMerged: merged,
     };
     updateIssue(config.issuesDir, issue);
+    console.log(`   ✅ Done — moving to next issue\n`);
+
+    // 8. Worktree cleanup in background — never blocks the pipeline
+    if (worktreePath) {
+      removeWorktreeAsync(config.projectDir, worktreePath);
+      worktreePath = ''; // prevent finally block from doing sync cleanup
+    }
 
   } catch (err: any) {
     console.error(`   ❌ Failed: ${err.message}`);
@@ -453,11 +472,17 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     };
     updateIssue(config.issuesDir, issue);
 
-  } finally {
-    // 7. Always clean up worktree
+    // On failure, do sync cleanup since we might retry soon and need a clean slate
     if (worktreePath) {
       console.log('   🧹 Cleaning up worktree...');
-      removeWorktree(config.projectDir, worktreePath);
+      removeWorktreeSync(config.projectDir, worktreePath);
+      worktreePath = '';
+    }
+
+  } finally {
+    // Safety net — only runs if something unexpected skipped both paths above
+    if (worktreePath) {
+      removeWorktreeAsync(config.projectDir, worktreePath);
     }
   }
 }
