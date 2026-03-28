@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "tsx src/resolver.ts",
-    "dev": "tsx watch src/resolver.ts"
+    "start": "npx tsx src/resolver.ts",
+    "dev": "npx tsx watch src/resolver.ts"
   },
   "dependencies": {
     "tsx": "^4.7.0"

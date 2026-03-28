@@ -35,6 +35,11 @@ function runStep(name: string, command: string, cwd: string): ValidationStep {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 180000, // 3 min per step
+      shell: '/bin/bash',
+      env: {
+        ...process.env,
+        PATH: `${cwd}/node_modules/.bin:${process.env.HOME}/.npm-global/bin:/usr/local/bin:${process.env.PATH}`,
+      },
     });
     return {
       name,
@@ -43,11 +48,11 @@ function runStep(name: string, command: string, cwd: string): ValidationStep {
       duration: Date.now() - start,
     };
   } catch (err: any) {
-    const output = [err.stdout ?? '', err.stderr ?? '', err.message ?? ''].join('\n');
+    const output = [err.stdout ?? '', err.stderr ?? ''].join('\n').trim() || err.message;
     return {
       name,
       passed: false,
-      output: output.trim().slice(-500),
+      output: output.slice(-500),
       duration: Date.now() - start,
     };
   }
@@ -61,11 +66,13 @@ export function validate(projectDir: string, failFast = false): ValidationResult
   const start = Date.now();
   const steps: ValidationStep[] = [];
 
+  // Use ./node_modules/.bin/ directly — avoids npx resolution failures in child shells
+  const bin = `${projectDir}/node_modules/.bin`;
   const pipeline: Array<{ name: string; command: string }> = [
-    { name: 'Secret Scan', command: 'npx tsx agents/security/src/scanner.ts --dir .' },
-    { name: 'ESLint', command: 'npx eslint .' },
-    { name: 'TypeScript', command: 'npx tsc -b' },
-    { name: 'Unit Tests', command: 'npx vitest run' },
+    { name: 'Secret Scan', command: `${bin}/tsx agents/security/src/scanner.ts --dir .` },
+    { name: 'ESLint', command: `${bin}/eslint .` },
+    { name: 'TypeScript', command: `${bin}/tsc -b` },
+    { name: 'Unit Tests', command: `${bin}/vitest run` },
     { name: 'Build', command: 'npm run build' },
   ];
 
