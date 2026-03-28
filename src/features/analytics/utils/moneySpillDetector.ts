@@ -32,7 +32,8 @@ export function detectMoneySpills(
   const dismissedIds = new Set(existingSpills.filter(s => s.isDismissed).map(s => s.id));
 
   // If month-scoped, filter debits to that month for most detectors
-  const allDebits = transactions.filter(t => t.type === 'debit');
+  // Exclude installment transactions — they are intentional recurring payments, not spills
+  const allDebits = transactions.filter(t => t.type === 'debit' && !t.tags.includes('installment'));
   const scopedDebits = monthScope
     ? allDebits.filter(t => t.date.getFullYear() === monthScope.year && t.date.getMonth() === monthScope.month)
     : allDebits;
