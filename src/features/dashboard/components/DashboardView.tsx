@@ -387,12 +387,6 @@ export function DashboardView() {
     [allTransactions, start, end],
   );
 
-  // Recent = last 5 of selected month
-  const recentTransactions = useMemo(() => {
-    const source = transactions.length > 0 ? transactions : allTransactions;
-    return [...source].sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 5);
-  }, [transactions, allTransactions]);
-
   // Compute summary with category → transactions mapping
   const summary = useMemo(() => {
     const debits = transactions.filter((t) => t.type === 'debit');
@@ -542,44 +536,6 @@ export function DashboardView() {
       {/* Money Spills */}
       <MoneySpillsSummary transactions={allTransactions} categories={categories} />
 
-      {/* Recent transactions — clickable */}
-      {recentTransactions.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Recent</h3>
-          <UICard padding="sm">
-            <div className="flex flex-col">
-              {recentTransactions.map((t) => {
-                const cat = categories.find((c) => c.id === t.categoryId);
-                const card = cards.find((c) => c.id === t.cardId);
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => setSelectedTxn(t)}
-                    className="flex items-center gap-3 py-2.5 border-b border-gray-100 dark:border-gray-800 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg px-1 -mx-1 transition-colors text-left"
-                  >
-                    <div
-                      className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0"
-                      style={{ backgroundColor: cat?.color ?? '#9ca3af' }}
-                    >
-                      {(cat?.name ?? '?').charAt(0)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-900 dark:text-gray-100 truncate">{t.merchant || t.description}</p>
-                      <p className="text-xs text-gray-400">
-                        {cat?.name ?? 'Uncategorized'}
-                        {card ? ` · ${card.name}${card.lastFour ? ` ••${card.lastFour}` : ''}` : ''}
-                      </p>
-                    </div>
-                    <span className={`text-sm font-semibold tabular-nums ${t.type === 'credit' ? 'text-green-500' : 'text-gray-900 dark:text-gray-100'}`}>
-                      {t.type === 'credit' ? '+' : '-'}{formatCurrency(t.amount)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </UICard>
-        </div>
-      )}
     </div>
   );
 }
