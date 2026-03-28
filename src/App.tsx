@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Receipt, PieChart, Upload, Settings, Wallet, Moon, Sun, Plus, Download, UploadCloud } from 'lucide-react';
+import { LayoutDashboard, Receipt, PieChart, Upload, Settings, Wallet, Moon, Sun, Plus, Download, UploadCloud, Trash2, AlertTriangle, CreditCard, FileText } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { ThemeProvider, useTheme } from './core/hooks';
 import { ToastProvider, useToast, Button } from './ui';
 import { seedDefaultCategories } from './core/db/seed';
@@ -95,7 +96,50 @@ function SettingsPage() {
   const [recatResult, setRecatResult] = useState<{ updated: number; total: number } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearConfirmText, setClearConfirmText] = useState('');
+  const [isClearing, setIsClearing] = useState(false);
   const { showToast } = useToast();
+
+  // ─── Import history data ───
+  const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
+  const transactions = useLiveQuery(() => db.transactions.toArray()) ?? [];
+
+  const importSummary = useCallback(() => {
+    if (!transactions.length) return { byCard: [] as { cardName: string; lastFour: string; color: string; count: number; total: number; sources: string[]; dateRange: string }[], totalTxns: 0, totalCards: 0 };
+
+    const cardMap = new Map(cards.map(c => [c.id, c]));
+    const byCardId = new Map<string, { count: number; total: number; sources: Set<string>; minDate: Date; maxDate: Date }>();
+
+    for (const txn of transactions) {
+      const entry = byCardId.get(txn.cardId) ?? { count: 0, total: 0, sources: new Set<string>(), minDate: txn.date, maxDate: txn.date };
+      entry.count++;
+      if (txn.type === 'debit') entry.total += txn.amount;
+      entry.sources.add(txn.importSource);
+      if (txn.date < entry.minDate) entry.minDate = txn.date;
+      if (txn.date > entry.maxDate) entry.maxDate = txn.date;
+      byCardId.set(txn.cardId, entry);
+    }
+
+    const byCard = Array.from(byCardId.entries()).map(([cardId, data]) => {
+      const card = cardMap.get(cardId);
+      const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      const dateRange = fmt(data.minDate) === fmt(data.maxDate) ? fmt(data.minDate) : `${fmt(data.minDate)} – ${fmt(data.maxDate)}`;
+      return {
+        cardName: card ? card.name : 'Unknown Card',
+        lastFour: card ? card.lastFour : '????',
+        color: card?.color ?? '#6b7280',
+        count: data.count,
+        total: data.total,
+        sources: Array.from(data.sources),
+        dateRange,
+      };
+    }).sort((a, b) => b.count - a.count);
+
+    return { byCard, totalTxns: transactions.length, totalCards: cards.length };
+  }, [cards, transactions]);
+
+  const summary = importSummary();
 
   const handleRecategorize = async () => {
     setIsRecategorizing(true);
@@ -139,7 +183,7 @@ function SettingsPage() {
     }
   };
 
-  const handleImport = () => {
+  const handleRestoreBackup = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -154,7 +198,6 @@ function SettingsPage() {
           showToast('Invalid backup file', 'error');
           return;
         }
-        // Restore data — clear existing and bulk add
         await db.transaction('rw', [db.transactions, db.categories, db.cards, db.budgets, db.moneySpills, db.settings], async () => {
           await db.transactions.clear();
           await db.categories.clear();
@@ -163,7 +206,6 @@ function SettingsPage() {
           await db.moneySpills.clear();
           await db.settings.clear();
 
-          // Restore dates (JSON.parse turns them into strings)
           const txns = data.transactions.map((t: any) => ({
             ...t,
             date: new Date(t.date),
@@ -195,12 +237,84 @@ function SettingsPage() {
     input.click();
   };
 
+  const handleClearAllData = async () => {
+    if (clearConfirmText !== 'DELETE') return;
+    setIsClearing(true);
+    try {
+      await db.transaction('rw', [db.transactions, db.categories, db.cards, db.budgets, db.moneySpills, db.settings], async () => {
+        await db.transactions.clear();
+        await db.categories.clear();
+        await db.cards.clear();
+        await db.budgets.clear();
+        await db.moneySpills.clear();
+        await db.settings.clear();
+      });
+      // Re-seed default categories so the app still works
+      await seedDefaultCategories();
+      showToast('All data cleared', 'success');
+      setShowClearConfirm(false);
+      setClearConfirmText('');
+    } catch {
+      showToast('Failed to clear data', 'error');
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
   return (
     <div className="p-4 animate-fade-in flex flex-col gap-6">
       <h1 className="text-xl font-bold text-gray-900 dark:text-white">Settings</h1>
 
       {/* Cards section */}
       <CardManager />
+
+      {/* Import History */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Import History</h2>
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+          {summary.totalTxns === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No transactions imported yet. Go to Import to add your statements.</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {/* Summary stats */}
+              <div className="flex gap-4 pb-3 border-b border-gray-100 dark:border-gray-800">
+                <div>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{summary.totalTxns.toLocaleString()}</p>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">Transactions</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{summary.totalCards}</p>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">Cards</p>
+                </div>
+              </div>
+
+              {/* Per-card breakdown */}
+              {summary.byCard.map((card) => (
+                <div key={card.lastFour + card.cardName} className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: card.color + '18' }}>
+                    <CreditCard size={16} style={{ color: card.color }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                      {card.cardName} <span className="text-gray-400 font-normal">••{card.lastFour}</span>
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {card.count} transactions · ${card.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} spent · {card.dateRange}
+                    </p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    {card.sources.map((s) => (
+                      <span key={s} className="px-1.5 py-0.5 text-[10px] font-medium rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 uppercase">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Data management */}
       <div>
@@ -217,7 +331,6 @@ function SettingsPage() {
                 <p className="text-sm font-medium text-gray-900 dark:text-white">Backup & Restore</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">
                   Export all your data as a JSON file, or restore from a previous backup.
-                  Always back up before clearing browser data.
                 </p>
                 <div className="flex gap-2 mt-3">
                   <button
@@ -229,7 +342,7 @@ function SettingsPage() {
                     {isExporting ? 'Exporting...' : 'Export Data'}
                   </button>
                   <button
-                    onClick={handleImport}
+                    onClick={handleRestoreBackup}
                     disabled={isImporting}
                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors disabled:opacity-50"
                   >
@@ -250,8 +363,7 @@ function SettingsPage() {
               <div className="flex-1">
                 <p className="text-sm font-medium text-gray-900 dark:text-white">Re-categorize Transactions</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">
-                  Re-run auto-categorization on all existing transactions using the latest category keywords.
-                  Useful after importing statements or when categories have been updated.
+                  Re-run auto-categorization using the latest category keywords.
                 </p>
                 {recatResult && (
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1.5 font-medium">
@@ -266,6 +378,60 @@ function SettingsPage() {
                   <RefreshCw size={12} className={isRecategorizing ? 'animate-spin' : ''} />
                   {isRecategorizing ? 'Re-categorizing...' : 'Re-categorize All'}
                 </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Clear All Data */}
+          <div className="bg-white dark:bg-gray-900 border border-red-200 dark:border-red-900/40 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                <Trash2 size={18} className="text-red-500" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900 dark:text-white">Clear All Data</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">
+                  Permanently delete all transactions, cards, budgets, and spills. Categories will be reset to defaults. This cannot be undone.
+                </p>
+                {!showClearConfirm ? (
+                  <button
+                    onClick={() => setShowClearConfirm(true)}
+                    className="mt-3 flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 transition-colors"
+                  >
+                    <Trash2 size={12} />
+                    Clear Everything
+                  </button>
+                ) : (
+                  <div className="mt-3 p-3 bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-900/40">
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400 mb-2">
+                      <AlertTriangle size={14} />
+                      <span className="text-xs font-semibold">This will delete {summary.totalTxns} transactions across {summary.totalCards} cards</span>
+                    </div>
+                    <p className="text-[11px] text-red-500 dark:text-red-400/80 mb-2">Type <strong>DELETE</strong> to confirm:</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={clearConfirmText}
+                        onChange={(e) => setClearConfirmText(e.target.value)}
+                        placeholder="DELETE"
+                        className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-red-200 dark:border-red-800 bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+                      />
+                      <button
+                        onClick={handleClearAllData}
+                        disabled={clearConfirmText !== 'DELETE' || isClearing}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {isClearing ? 'Clearing...' : 'Confirm'}
+                      </button>
+                      <button
+                        onClick={() => { setShowClearConfirm(false); setClearConfirmText(''); }}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -92,11 +92,19 @@ export interface SyncState {
 export type CSVParserType = 'chase' | 'apple-card' | 'generic';
 export type ImportParserType = CSVParserType | 'chase-pdf' | 'apple-card-pdf';
 
+export interface DetectedCardInfo {
+  issuer: string;       // 'chase', 'apple', etc.
+  lastFour: string;     // last 4 digits of card number, or '' if unknown
+  name: string;         // e.g. 'Chase Freedom', 'Apple Card'
+  color: string;        // default color for auto-created card
+}
+
 export interface CSVImportResult {
   transactions: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>[];
   duplicatesSkipped: number;
   parseErrors: string[];
   parserUsed: ImportParserType;
+  detectedCard?: DetectedCardInfo;
 }
 
 // App Settings

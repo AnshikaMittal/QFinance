@@ -1,4 +1,4 @@
-import type { Transaction, CSVImportResult } from '../../../core/types';
+import type { Transaction, CSVImportResult, DetectedCardInfo } from '../../../core/types';
 
 const APPLE_HEADERS = ['Transaction Date', 'Clearing Date', 'Description', 'Merchant', 'Category', 'Type', 'Amount'];
 
@@ -72,10 +72,18 @@ export function parseAppleCardCSV(csvRows: string[][], cardId: string): CSVImpor
     }
   }
 
+  const detectedCard: DetectedCardInfo = {
+    issuer: 'apple',
+    lastFour: '', // CSV doesn't include card number
+    name: 'Apple Card',
+    color: '#1f2937',
+  };
+
   return {
     transactions,
     duplicatesSkipped: 0,
     parseErrors,
     parserUsed: 'apple-card',
+    detectedCard,
   };
 }

@@ -13,7 +13,7 @@
  *   - Statement period detection for year inference
  */
 
-import type { Transaction, CSVImportResult } from '../../../../core/types';
+import type { Transaction, CSVImportResult, DetectedCardInfo } from '../../../../core/types';
 
 /**
  * Transaction line pattern:
@@ -150,11 +150,15 @@ export function parseChasePDF(lines: string[], cardId: string): CSVImportResult 
     }
   }
 
+  // Extract last 4 digits and card name from statement
+  const detectedCard = detectCardInfo(lines);
+
   return {
     transactions,
     duplicatesSkipped: 0,
     parseErrors,
     parserUsed: 'chase-pdf',
+    detectedCard,
   };
 }
 
@@ -198,4 +202,50 @@ function cleanMerchant(description: string): string {
     .replace(/\*+/g, ' ')                              // asterisks
     .replace(/\s{2,}/g, ' ')                           // collapse whitespace
     .trim();
+}
+
+/**
+ * Extract card info from Chase PDF statement.
+ * Chase PDFs typically show:
+ *   "Account Number: xxxx xxxx xxxx 1234"  or  "Account ending in 1234"
+ *   Card name like "CHASE FREEDOM", "CHASE SAPPHIRE PREFERRED", etc.
+ */
+function detectCardInfo(lines: string[]): DetectedCardInfo {
+  let lastFour = '';
+  let cardName = 'Chase Card';
+
+  for (const line of lines) {
+    const l = line.trim();
+
+    // Match "Account Number: xxxx xxxx xxxx 1234" or "Account ending in 1234"
+    if (!lastFour) {
+      const acctMatch = l.match(/account\s*(?:number|#)?[:\s]*(?:[\dxX*•·.\-\s]*?)(\d{4})\s*$/i)
+        || l.match(/ending\s+in\s+(\d{4})/i)
+        || l.match(/\*{4,}\s*(\d{4})/);
+      if (acctMatch?.[1]) {
+        lastFour = acctMatch[1];
+      }
+    }
+
+    // Detect card product name
+    const lower = l.toLowerCase();
+    if (lower.includes('freedom flex')) { cardName = 'Chase Freedom Flex'; }
+    else if (lower.includes('freedom unlimited')) { cardName = 'Chase Freedom Unlimited'; }
+    else if (lower.includes('freedom')) { cardName = 'Chase Freedom'; }
+    else if (lower.includes('sapphire preferred')) { cardName = 'Chase Sapphire Preferred'; }
+    else if (lower.includes('sapphire reserve')) { cardName = 'Chase Sapphire Reserve'; }
+    else if (lower.includes('sapphire')) { cardName = 'Chase Sapphire'; }
+    else if (lower.includes('amazon') && lower.includes('chase')) { cardName = 'Amazon Prime Visa'; }
+    else if (lower.includes('united')) { cardName = 'Chase United'; }
+    else if (lower.includes('marriott')) { cardName = 'Chase Marriott Bonvoy'; }
+    else if (lower.includes('ink business')) { cardName = 'Chase Ink Business'; }
+    else if (lower.includes('southwest')) { cardName = 'Chase Southwest'; }
+  }
+
+  return {
+    issuer: 'chase',
+    lastFour,
+    name: cardName,
+    color: '#1e40af',
+  };
 }

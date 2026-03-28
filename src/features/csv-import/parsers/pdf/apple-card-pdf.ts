@@ -15,7 +15,7 @@
  *   - Payments vs purchases section detection
  */
 
-import type { Transaction, CSVImportResult } from '../../../../core/types';
+import type { Transaction, CSVImportResult, DetectedCardInfo } from '../../../../core/types';
 
 /**
  * Apple Card transaction line patterns.
@@ -157,11 +157,14 @@ export function parseAppleCardPDF(lines: string[], cardId: string): CSVImportRes
     }
   }
 
+  const detectedCard = detectCardInfo(lines);
+
   return {
     transactions,
     duplicatesSkipped: 0,
     parseErrors,
     parserUsed: 'apple-card-pdf',
+    detectedCard,
   };
 }
 
@@ -192,4 +195,31 @@ function cleanDescription(desc: string): string {
     .replace(/\s+\d+%?\s*daily\s*cash.*$/i, '')  // "3% Daily Cash"
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+/**
+ * Extract card info from Apple Card PDF.
+ * Apple Card PDFs may show last 4 digits on the statement.
+ */
+function detectCardInfo(lines: string[]): DetectedCardInfo {
+  let lastFour = '';
+
+  for (const line of lines) {
+    const l = line.trim();
+    // Apple Card statements may show "Card Number ending in 1234" or similar
+    const match = l.match(/ending\s+in\s+(\d{4})/i)
+      || l.match(/card\s*(?:number)?[:\s]*(?:[\dxX*•·.\-\s]*?)(\d{4})\s*$/i)
+      || l.match(/\*{4,}\s*(\d{4})/);
+    if (match?.[1]) {
+      lastFour = match[1];
+      break;
+    }
+  }
+
+  return {
+    issuer: 'apple',
+    lastFour,
+    name: 'Apple Card',
+    color: '#1f2937',
+  };
 }

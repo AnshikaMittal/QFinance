@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { Upload, CheckCircle, AlertCircle, ArrowLeft, Loader2, CreditCard } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../../core/db';
-import { Button, Select, Card as UICard, Badge, EmptyState } from '../../../ui';
+import { Button, Card as UICard, Badge } from '../../../ui';
 import { useCSVImport } from '../hooks/useCSVImport';
 import { formatCurrency } from '../../../core/utils';
 
@@ -18,35 +18,40 @@ function formatParserName(parser: string): string {
 }
 
 export function CSVDropZone() {
-  const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
   const categories = useLiveQuery(() => db.categories.toArray()) ?? [];
-  const [cardId, setCardId] = useState('');
+  const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { status, result, error, importedCount, parseFile, confirmImport, reset } = useCSVImport();
+  const { status, result, error, importedCount, resolvedCardId, parseFile, confirmImport, reset } = useCSVImport();
   const isImporting = status === 'importing';
+
+  const handleFile = useCallback(
+    (file: File) => {
+      parseFile(file);
+    },
+    [parseFile],
+  );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
       const file = e.dataTransfer.files[0];
-      if (file && cardId) {
-        parseFile(file, cardId);
-      }
+      if (file) handleFile(file);
     },
-    [cardId, parseFile],
+    [handleFile],
   );
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file && cardId) {
-        parseFile(file, cardId);
-      }
+      if (file) handleFile(file);
     },
-    [cardId, parseFile],
+    [handleFile],
   );
+
+  // Find the resolved card for display
+  const resolvedCard = cards.find((c) => c.id === resolvedCardId);
 
   // Success state
   if (status === 'done') {
@@ -59,6 +64,16 @@ export function CSVDropZone() {
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
           {importedCount} transaction{importedCount !== 1 ? 's' : ''} imported successfully.
         </p>
+        {resolvedCard && (
+          <div className="flex items-center gap-2 mt-1 mb-3">
+            <div className="w-6 h-4 rounded" style={{ backgroundColor: resolvedCard.color }}>
+              <CreditCard size={10} className="text-white m-auto mt-0.5" />
+            </div>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              {resolvedCard.name} {resolvedCard.lastFour !== '0000' && `••${resolvedCard.lastFour}`}
+            </span>
+          </div>
+        )}
         {result && result.parseErrors.length > 0 && (
           <p className="text-xs text-amber-500 mb-4">{result.parseErrors.length} row(s) skipped due to errors</p>
         )}
@@ -102,7 +117,17 @@ export function CSVDropZone() {
 
         <UICard className="mb-4">
           <div className="flex items-center justify-between mb-3">
-            <Badge color="#3b82f6">{formatParserName(result.parserUsed)}</Badge>
+            <div className="flex items-center gap-2">
+              <Badge color="#3b82f6">{formatParserName(result.parserUsed)}</Badge>
+              {resolvedCard && (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-800">
+                  <div className="w-4 h-3 rounded-sm" style={{ backgroundColor: resolvedCard.color }} />
+                  <span className="text-[11px] font-medium text-gray-600 dark:text-gray-400">
+                    {resolvedCard.name} {resolvedCard.lastFour !== '0000' && `••${resolvedCard.lastFour}`}
+                  </span>
+                </div>
+              )}
+            </div>
             <span className="text-xs text-gray-400">{result.transactions.length} transactions</span>
           </div>
           <div className="grid grid-cols-3 gap-3 text-center">
@@ -177,32 +202,9 @@ export function CSVDropZone() {
     );
   }
 
-  // Default: drop zone
+  // Default: drop zone — no card selection needed
   return (
     <div className="animate-fade-in">
-      {/* Card selection */}
-      <div className="mb-4">
-        {cards.length === 0 ? (
-          <UICard>
-            <div className="flex items-center gap-3">
-              <CreditCard size={18} className="text-amber-500" />
-              <div>
-                <p className="text-sm font-medium text-gray-900 dark:text-white">Add a card first</p>
-                <p className="text-xs text-gray-400">Go to Settings to add your Chase or Apple Card before importing.</p>
-              </div>
-            </div>
-          </UICard>
-        ) : (
-          <Select
-            label="Which card is this statement from?"
-            value={cardId}
-            onChange={(e) => setCardId(e.target.value)}
-            placeholder="Select a card"
-            options={cards.map((c) => ({ value: c.id, label: `${c.name} (...${c.lastFour})` }))}
-          />
-        )}
-      </div>
-
       {/* Drop zone */}
       <div
         onDragOver={(e) => {
@@ -211,7 +213,7 @@ export function CSVDropZone() {
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
-        onClick={() => cardId && fileInputRef.current?.click()}
+        onClick={() => fileInputRef.current?.click()}
         className={`
           relative flex flex-col items-center justify-center
           py-12 px-4 rounded-2xl border-2 border-dashed cursor-pointer
@@ -219,9 +221,7 @@ export function CSVDropZone() {
           ${
             isDragging
               ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-500/5 scale-[1.01]'
-              : cardId
-              ? 'border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-gray-50 dark:hover:bg-gray-800/30'
-              : 'border-gray-200 dark:border-gray-800 opacity-50 cursor-not-allowed'
+              : 'border-gray-200 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-gray-50 dark:hover:bg-gray-800/30'
           }
         `.trim()}
       >
@@ -235,10 +235,10 @@ export function CSVDropZone() {
           )}
         </div>
         <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          {status === 'parsing' ? 'Parsing...' : 'Drop CSV or PDF statement here'}
+          {status === 'parsing' ? 'Parsing statement...' : 'Drop CSV or PDF statement here'}
         </p>
         <p className="text-xs text-gray-400 dark:text-gray-500">
-          or tap to browse · Chase & Apple Card supported
+          or tap to browse · card auto-detected from statement
         </p>
         <input
           ref={fileInputRef}
@@ -248,6 +248,25 @@ export function CSVDropZone() {
           className="hidden"
         />
       </div>
+
+      {/* Show detected cards summary below */}
+      {cards.length > 0 && (
+        <div className="mt-4 px-1">
+          <p className="text-[11px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Imported cards</p>
+          <div className="flex flex-wrap gap-2">
+            {cards.map((card) => (
+              <div key={card.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200/60 dark:border-gray-800">
+                <div className="w-5 h-3.5 rounded-sm" style={{ backgroundColor: card.color }}>
+                  <CreditCard size={8} className="text-white m-auto mt-0.5" />
+                </div>
+                <span className="text-xs text-gray-600 dark:text-gray-400">
+                  {card.name} {card.lastFour !== '0000' && `••${card.lastFour}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

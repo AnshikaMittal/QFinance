@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { CreditCard, Plus, Trash2, Pencil } from 'lucide-react';
+import { CreditCard, Trash2, Pencil } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { v4 as uuidv4 } from 'uuid';
 import { db } from '../../../core/db';
-import { Button, Input, Select, Modal, Card as UICard, EmptyState } from '../../../ui';
+import { Button, Input, Select, Modal, EmptyState } from '../../../ui';
 import type { Card } from '../../../core/types';
 
 const CARD_COLORS = [
@@ -58,25 +57,15 @@ export function CardManager() {
   };
 
   const handleSave = async () => {
-    if (!name.trim() || !lastFour.trim()) return;
+    if (!name.trim()) return;
 
     if (editingCard) {
       await db.cards.update(editingCard.id, {
         name: name.trim(),
         issuer,
-        lastFour: lastFour.trim(),
+        lastFour: lastFour.trim() || editingCard.lastFour,
         color,
         type,
-      });
-    } else {
-      await db.cards.add({
-        id: uuidv4(),
-        name: name.trim(),
-        issuer,
-        lastFour: lastFour.trim(),
-        color,
-        type,
-        createdAt: new Date(),
       });
     }
     setShowForm(false);
@@ -89,37 +78,16 @@ export function CardManager() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Your Cards</h2>
-        <Button
-          size="sm"
-          onClick={() => {
-            resetForm();
-            setShowForm(true);
-          }}
-          icon={<Plus size={14} />}
-        >
-          Add
-        </Button>
-      </div>
+      <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Your Cards</h2>
 
       {cards.length === 0 ? (
         <EmptyState
           icon={<CreditCard size={24} />}
-          title="No cards added"
-          description="Add your credit or debit cards to track spending per card."
-          action={
-            <Button
-              size="sm"
-              onClick={() => setShowForm(true)}
-              icon={<Plus size={14} />}
-            >
-              Add Card
-            </Button>
-          }
+          title="No cards yet"
+          description="Cards are auto-created when you import a statement. Go to Import to get started."
         />
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
           {cards.map((card) => (
             <div
               key={card.id}
@@ -134,7 +102,8 @@ export function CardManager() {
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{card.name}</div>
                 <div className="text-xs text-gray-400 dark:text-gray-500">
-                  {ISSUERS.find((i) => i.value === card.issuer)?.label ?? card.issuer} · ...{card.lastFour}
+                  {ISSUERS.find((i) => i.value === card.issuer)?.label ?? card.issuer}
+                  {card.lastFour && card.lastFour !== '0000' ? ` · ••${card.lastFour}` : ''}
                 </div>
               </div>
               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -162,7 +131,7 @@ export function CardManager() {
           setShowForm(false);
           resetForm();
         }}
-        title={editingCard ? 'Edit Card' : 'Add Card'}
+        title="Edit Card"
       >
         <div className="flex flex-col gap-4">
           <Input label="Card Name" placeholder="e.g. Chase Freedom Flex" value={name} onChange={(e) => setName(e.target.value)} />
@@ -198,7 +167,7 @@ export function CardManager() {
             </div>
           </div>
           <Button onClick={handleSave} fullWidth>
-            {editingCard ? 'Save Changes' : 'Add Card'}
+            Save Changes
           </Button>
         </div>
       </Modal>

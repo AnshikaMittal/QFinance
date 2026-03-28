@@ -1,5 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
-import type { Transaction, CSVImportResult } from '../../../core/types';
+import type { Transaction, CSVImportResult, DetectedCardInfo } from '../../../core/types';
 
 const CHASE_HEADERS = ['Transaction Date', 'Post Date', 'Description', 'Category', 'Type', 'Amount'];
 
@@ -69,11 +68,19 @@ export function parseChaseCSV(csvRows: string[][], cardId: string): CSVImportRes
     }
   }
 
+  const detectedCard: DetectedCardInfo = {
+    issuer: 'chase',
+    lastFour: '', // CSV doesn't include card number
+    name: 'Chase Card',
+    color: '#1e40af',
+  };
+
   return {
     transactions,
     duplicatesSkipped: 0,
     parseErrors,
     parserUsed: 'chase',
+    detectedCard,
   };
 }
 
