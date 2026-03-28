@@ -5,28 +5,25 @@
  * then creates PRs with the fixes.
  *
  * Architecture:
- *   1. Scan issues/ directory for pending issues
- *   2. For each pending issue:
- *      a. Read the issue description
- *      b. Determine which module is affected
- *      c. Shell out to Claude Code to generate the fix
- *      d. Create a branch, commit changes, push, and open a PR
- *      e. Update local issue status
+ *   - Uses `git worktree` to create an isolated clean copy per issue
+ *   - Never touches the user's working tree (no checkout, no pull, no stash)
+ *   - Claude Code runs inside the worktree, so dirty main tree is irrelevant
+ *   - After push + PR, worktree is cleaned up
  *
  * Environment:
  *   GITHUB_TOKEN    — GitHub PAT with repo scope
  *   GITHUB_REPO     — Owner/repo
- *   ISSUES_DIR      — Local issues directory (default: ../issue-poller/issues)
+ *   ISSUES_DIR      — Local issues directory
  *   PROJECT_DIR     — Path to quickfinance project root
  *   POLL_INTERVAL   — Check interval in seconds (default: 60)
  */
 
 import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-// Load .env from project root
+// Load .env from agent dir then project root
 function loadEnv(): void {
   const __dir = dirname(fileURLToPath(import.meta.url));
   for (const envPath of [resolve(__dir, '..', '.env'), resolve(__dir, '..', '..', '..', '.env')]) {
@@ -84,8 +81,9 @@ function getConfig() {
   const __dir = dirname(fileURLToPath(import.meta.url));
   const issuesDir = process.env.ISSUES_DIR ?? join(__dir, '..', '..', 'issue-poller', 'issues');
   const pollInterval = parseInt(process.env.POLL_INTERVAL ?? '60', 10);
+  const worktreeBase = join(projectDir, '..', '.qf-worktrees');
 
-  return { githubToken, githubRepo, projectDir, issuesDir, pollInterval };
+  return { githubToken, githubRepo, projectDir, issuesDir, pollInterval, worktreeBase };
 }
 
 // --- Issue Store ---
@@ -114,6 +112,12 @@ function updateIssue(issuesDir: string, issue: LocalIssue): void {
 function detectAffectedModule(issue: LocalIssue): string {
   const text = `${issue.title} ${issue.body}`.toLowerCase();
 
+  // App-level issues that touch root files (App.tsx, routing, navigation, tabs)
+  const appLevelKeywords = ['tab', 'navigation', 'nav', 'route', 'layout', 'move', 'reorder', 'swap', 'sidebar', 'menu'];
+  if (appLevelKeywords.some((kw) => text.includes(kw))) {
+    return 'src';
+  }
+
   const moduleKeywords: Record<string, string[]> = {
     'src/features/transactions': ['transaction', 'expense', 'spending', 'entry', 'add transaction'],
     'src/features/csv-import': ['csv', 'import', 'statement', 'chase', 'apple card', 'parse', 'pdf statement', 'pdf import'],
@@ -133,53 +137,122 @@ function detectAffectedModule(issue: LocalIssue): string {
     }
   }
 
-  return 'src'; // fallback: whole src
+  return 'src';
 }
 
-// --- Git Operations ---
-function git(projectDir: string, ...args: string[]): string {
+// --- Shell helpers ---
+function shell(cmd: string, cwd: string): string {
   try {
-    // Use spawnSync-style array to avoid shell escaping issues
-    return execSync(`git ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`, {
-      cwd: projectDir,
+    return execSync(cmd, {
+      cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: '/bin/bash',
     }).trim();
   } catch (err: any) {
-    throw new Error(`Git error: ${err.stderr ?? err.message}`);
+    throw new Error(err.stderr?.trim() || err.message);
   }
 }
 
-function createBranch(projectDir: string, issueNumber: number): string {
-  const branchName = `auto-fix/issue-${issueNumber}`;
+// --- Worktree Management ---
+function createWorktree(projectDir: string, worktreeBase: string, branchName: string): string {
+  mkdirSync(worktreeBase, { recursive: true });
+  const worktreePath = join(worktreeBase, branchName);
 
-  // Ensure we're on main and up to date
-  git(projectDir, 'checkout', 'main');
-  git(projectDir, 'pull', 'origin', 'main', '--rebase');
+  // Clean up stale worktree if it exists
+  if (existsSync(worktreePath)) {
+    try { shell(`git worktree remove --force '${worktreePath}'`, projectDir); } catch { /* ignore */ }
+    try { rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 
-  // Create and switch to new branch
+  // Fetch latest from remote (safe — doesn't touch working tree)
+  shell('git fetch origin main', projectDir);
+
+  // Delete the branch if it exists from a previous attempt
+  try { shell(`git branch -D '${branchName}'`, projectDir); } catch { /* ignore */ }
+
+  // Create worktree with new branch based on origin/main
+  shell(`git worktree add -b '${branchName}' '${worktreePath}' origin/main`, projectDir);
+
+  // Install dependencies in worktree so Claude Code can run tests/build
+  console.log('   📦 Installing dependencies in worktree...');
+  shell('npm ci --ignore-scripts 2>/dev/null || npm install', worktreePath);
+
+  return worktreePath;
+}
+
+function removeWorktree(projectDir: string, worktreePath: string): void {
+  try { shell(`git worktree remove --force '${worktreePath}'`, projectDir); } catch { /* ignore */ }
+  try { rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
+// --- Claude Integration ---
+function findClaudeBinary(): string {
+  const candidates = [
+    'claude',
+    `${process.env.HOME}/.claude/bin/claude`,
+    `${process.env.HOME}/.npm-global/bin/claude`,
+    '/usr/local/bin/claude',
+  ];
+
+  for (const bin of candidates) {
+    try {
+      execSync(`${bin} --version`, { stdio: 'pipe', encoding: 'utf-8' });
+      return bin;
+    } catch { /* not here, try next */ }
+  }
+
+  return 'npx -y @anthropic-ai/claude-code';
+}
+
+let claudeBin: string | null = null;
+
+function invokeClaudeCode(worktreePath: string, module: string, issue: LocalIssue): boolean {
+  if (!claudeBin) {
+    claudeBin = findClaudeBinary();
+    console.log(`   🔍 Using Claude CLI: ${claudeBin}`);
+  }
+
+  const prompt = [
+    `Fix the following issue in the QuickFinance project.`,
+    `Focus on files within the "${module}" directory, but modify other src/ files if needed (e.g. App.tsx for layout/navigation changes).`,
+    ``,
+    `Issue #${issue.number}: ${issue.title}`,
+    ``,
+    issue.body,
+    ``,
+    `Important:`,
+    `- Make minimal, focused changes`,
+    `- Follow existing code patterns and conventions`,
+    `- Do not modify agent files or config files`,
+    `- Use TypeScript strict mode (noUncheckedIndexedAccess is enabled)`,
+  ].join('\n');
+
+  const promptFile = join(worktreePath, '.claude-prompt.tmp');
+  writeFileSync(promptFile, prompt, 'utf-8');
+
   try {
-    git(projectDir, 'checkout', '-b', branchName);
-  } catch {
-    // Branch might already exist
-    git(projectDir, 'checkout', branchName);
-    git(projectDir, 'rebase', 'main');
+    execSync(
+      `${claudeBin} --print --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20 < "${promptFile}"`,
+      {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'inherit', 'inherit'],
+        timeout: 300000,
+        shell: '/bin/bash',
+        env: {
+          ...process.env,
+          PATH: `${process.env.HOME}/.claude/bin:${process.env.HOME}/.npm-global/bin:/usr/local/bin:${process.env.PATH}`,
+        },
+      },
+    );
+    return true;
+  } catch (err: any) {
+    console.error(`   Claude Code exit code: ${err.status}`);
+    return false;
+  } finally {
+    try { execSync(`rm -f "${promptFile}"`, { stdio: 'pipe' }); } catch { /* ignore */ }
   }
-
-  return branchName;
-}
-
-function commitAndPush(projectDir: string, branchName: string, message: string): void {
-  git(projectDir, 'add', '-A');
-
-  const status = git(projectDir, 'status', '--porcelain');
-  if (!status) {
-    throw new Error('No changes to commit');
-  }
-
-  git(projectDir, 'commit', '-m', message);
-  git(projectDir, 'push', '-u', 'origin', branchName);
 }
 
 // --- GitHub PR ---
@@ -212,128 +285,62 @@ async function createPullRequest(
   return res.json() as Promise<{ number: number; html_url: string }>;
 }
 
-// --- Claude Integration ---
-function findClaudeBinary(): string {
-  // Try common locations for claude CLI
-  const candidates = [
-    'claude',                                          // global PATH
-    `${process.env.HOME}/.claude/bin/claude`,           // default install location
-    `${process.env.HOME}/.npm-global/bin/claude`,       // npm global
-    '/usr/local/bin/claude',                            // system-wide
-  ];
-
-  for (const bin of candidates) {
-    try {
-      execSync(`${bin} --version`, { stdio: 'pipe', encoding: 'utf-8' });
-      return bin;
-    } catch { /* not here, try next */ }
-  }
-
-  // Fall back to npx (downloads if needed, always works)
-  return 'npx -y @anthropic-ai/claude-code';
-}
-
-let claudeBin: string | null = null;
-
-function invokeClaudeCode(projectDir: string, module: string, issue: LocalIssue): boolean {
-  if (!claudeBin) {
-    claudeBin = findClaudeBinary();
-    console.log(`   🔍 Using Claude CLI: ${claudeBin}`);
-  }
-
-  const prompt = [
-    `Fix the following issue in the QuickFinance project.`,
-    `Only modify files within the "${module}" directory.`,
-    `After making changes, add or update relevant unit tests.`,
-    ``,
-    `Issue #${issue.number}: ${issue.title}`,
-    ``,
-    issue.body,
-    ``,
-    `Important:`,
-    `- Make minimal, focused changes`,
-    `- Follow existing code patterns and conventions`,
-    `- Add unit tests for any new or changed functionality`,
-    `- Do not modify files outside "${module}" unless absolutely necessary`,
-    `- Use TypeScript strict mode (noUncheckedIndexedAccess is enabled)`,
-  ].join('\n');
-
-  // Write prompt to a temp file to avoid shell escaping issues
-  const promptFile = join(projectDir, '.claude-prompt.tmp');
-  writeFileSync(promptFile, prompt, 'utf-8');
-
-  try {
-    // Use --print flag with stdin from file, inherit stderr so we see errors
-    const result = execSync(
-      `${claudeBin} --print --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20 < "${promptFile}"`,
-      {
-        cwd: projectDir,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'inherit', 'inherit'],  // stream stdout+stderr to terminal live
-        timeout: 300000, // 5 minute timeout
-        shell: '/bin/bash',
-        env: {
-          ...process.env,
-          PATH: `${process.env.HOME}/.claude/bin:${process.env.HOME}/.npm-global/bin:/usr/local/bin:${process.env.PATH}`,
-        },
-      },
-    );
-    return true;
-  } catch (err: any) {
-    console.error(`   Claude Code exit code: ${err.status}`);
-    return false;
-  } finally {
-    try { execSync(`rm -f "${promptFile}"`, { stdio: 'pipe' }); } catch { /* ignore */ }
-  }
-}
-
 // --- Resolve Issue ---
 async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIssue): Promise<void> {
   console.log(`\n🔧 Resolving #${issue.number}: ${issue.title}`);
 
-  // Mark as in progress
   issue.status = 'in_progress';
   updateIssue(config.issuesDir, issue);
+
+  const branchName = `auto-fix/issue-${issue.number}`;
+  let worktreePath = '';
 
   try {
     // 1. Detect affected module
     const module = detectAffectedModule(issue);
     console.log(`   📂 Affected module: ${module}`);
 
-    // 2. Create branch
-    const branch = createBranch(config.projectDir, issue.number);
-    console.log(`   🌿 Branch: ${branch}`);
+    // 2. Create isolated worktree (never touches main working tree)
+    console.log(`   🌿 Creating worktree for ${branchName}...`);
+    worktreePath = createWorktree(config.projectDir, config.worktreeBase, branchName);
+    console.log(`   📁 Worktree: ${worktreePath}`);
 
-    // 3. Invoke Claude Code to fix the issue
+    // 3. Invoke Claude Code inside the worktree
     console.log(`   🤖 Invoking Claude Code...`);
-    const success = invokeClaudeCode(config.projectDir, module, issue);
+    const success = invokeClaudeCode(worktreePath, module, issue);
 
     if (!success) {
       throw new Error('Claude Code failed to generate a fix');
     }
 
-    // 4. Commit and push (single-line message to avoid shell escaping issues)
+    // 4. Commit and push from the worktree
     const commitMsg = `fix(issue-${issue.number}): ${issue.title}`;
-    commitAndPush(config.projectDir, branch, commitMsg);
-    console.log(`   📤 Pushed to ${branch}`);
+    shell('git add -A', worktreePath);
+
+    const status = shell('git status --porcelain', worktreePath);
+    if (!status) {
+      throw new Error('No changes to commit — Claude Code made no modifications');
+    }
+
+    shell(`git commit -m '${commitMsg.replace(/'/g, "'\\''")}'`, worktreePath);
+    shell(`git push -u origin '${branchName}'`, worktreePath);
+    console.log(`   📤 Pushed to ${branchName}`);
 
     // 5. Create PR
-    const prTitle = `fix: resolve #${issue.number} — ${issue.title}`;
+    const prTitle = `fix: resolve #${issue.number} - ${issue.title}`;
     const prBody = [
       `## Auto-Resolved Issue`,
       '',
       `Closes #${issue.number}`,
       '',
       `**Original issue:** ${issue.url}`,
-      '',
       `**Module:** \`${module}\``,
       '',
       '---',
       '*This PR was automatically generated by the QuickFinance Auto-Resolver agent.*',
-      '*It will be auto-merged if all CI checks pass.*',
     ].join('\n');
 
-    const pr = await createPullRequest(config.githubToken, config.githubRepo, prTitle, prBody, branch);
+    const pr = await createPullRequest(config.githubToken, config.githubRepo, prTitle, prBody, branchName);
     console.log(`   ✅ PR #${pr.number}: ${pr.html_url}`);
 
     // 6. Update issue status
@@ -345,23 +352,22 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     };
     updateIssue(config.issuesDir, issue);
 
-    // 7. Return to main
-    git(config.projectDir, 'checkout', 'main');
-
   } catch (err: any) {
     console.error(`   ❌ Failed: ${err.message}`);
 
-    issue.status = 'pending'; // Reset to pending for retry
+    issue.status = 'pending';
     issue.resolution = {
       error: err.message,
       resolvedAt: new Date().toISOString(),
     };
     updateIssue(config.issuesDir, issue);
 
-    // Return to main on failure
-    try {
-      git(config.projectDir, 'checkout', 'main');
-    } catch { /* ignore */ }
+  } finally {
+    // 7. Always clean up worktree
+    if (worktreePath) {
+      console.log('   🧹 Cleaning up worktree...');
+      removeWorktree(config.projectDir, worktreePath);
+    }
   }
 }
 
@@ -373,6 +379,7 @@ async function main(): Promise<void> {
   console.log(`   Repo: ${config.githubRepo}`);
   console.log(`   Project: ${config.projectDir}`);
   console.log(`   Issues: ${config.issuesDir}`);
+  console.log(`   Worktrees: ${config.worktreeBase}`);
   console.log(`   Poll interval: ${config.pollInterval}s`);
   console.log('');
 
@@ -383,7 +390,6 @@ async function main(): Promise<void> {
       if (pending.length > 0) {
         console.log(`[${new Date().toLocaleTimeString()}] ${pending.length} pending issue(s)`);
 
-        // Process one at a time
         const issue = pending[0];
         if (issue) {
           await resolveIssue(config, issue);
