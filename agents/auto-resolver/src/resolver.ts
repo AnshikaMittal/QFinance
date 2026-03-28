@@ -139,10 +139,12 @@ function detectAffectedModule(issue: LocalIssue): string {
 // --- Git Operations ---
 function git(projectDir: string, ...args: string[]): string {
   try {
-    return execSync(`git ${args.join(' ')}`, {
+    // Use spawnSync-style array to avoid shell escaping issues
+    return execSync(`git ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`, {
       cwd: projectDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: '/bin/bash',
     }).trim();
   } catch (err: any) {
     throw new Error(`Git error: ${err.stderr ?? err.message}`);
@@ -267,7 +269,7 @@ function invokeClaudeCode(projectDir: string, module: string, issue: LocalIssue)
       {
         cwd: projectDir,
         encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['pipe', 'inherit', 'inherit'],  // stream stdout+stderr to terminal live
         timeout: 300000, // 5 minute timeout
         shell: '/bin/bash',
         env: {
@@ -276,14 +278,8 @@ function invokeClaudeCode(projectDir: string, module: string, issue: LocalIssue)
         },
       },
     );
-    console.log(`   📝 Claude output: ${result.slice(0, 200)}...`);
     return true;
   } catch (err: any) {
-    // Show the actual error, not just "Command failed"
-    const stderr = err.stderr ? String(err.stderr).trim() : '';
-    const stdout = err.stdout ? String(err.stdout).trim() : '';
-    console.error(`   Claude Code stderr: ${stderr || '(none)'}`);
-    console.error(`   Claude Code stdout: ${stdout.slice(0, 300) || '(none)'}`);
     console.error(`   Claude Code exit code: ${err.status}`);
     return false;
   } finally {
@@ -316,8 +312,8 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
       throw new Error('Claude Code failed to generate a fix');
     }
 
-    // 4. Commit and push
-    const commitMsg = `fix: resolve #${issue.number} — ${issue.title}\n\nAuto-resolved by QuickFinance Agent\nCloses #${issue.number}`;
+    // 4. Commit and push (single-line message to avoid shell escaping issues)
+    const commitMsg = `fix(issue-${issue.number}): ${issue.title}`;
     commitAndPush(config.projectDir, branch, commitMsg);
     console.log(`   📤 Pushed to ${branch}`);
 

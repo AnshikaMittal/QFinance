@@ -506,10 +506,10 @@ function SettingsPage() {
   );
 }
 
-const navItems = [
+export const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Home' },
-  { to: '/transactions', icon: Receipt, label: 'Txns' },
   { to: '/analytics', icon: PieChart, label: 'Stats' },
+  { to: '/transactions', icon: Receipt, label: 'Txns' },
   { to: '/import', icon: Upload, label: 'Import' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
