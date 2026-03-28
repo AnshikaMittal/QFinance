@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Receipt, PieChart, Upload, Settings, Wallet, Moon, Sun, Plus, Download, UploadCloud, Trash2, AlertTriangle, CreditCard, FileText } from 'lucide-react';
+import { LayoutDashboard, Receipt, PieChart, Upload, Settings, Wallet, Moon, Sun, Plus, Download, UploadCloud, Trash2, AlertTriangle, CreditCard, Bell, Check } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ThemeProvider, useTheme } from './core/hooks';
 import { ToastProvider, useToast, Button } from './ui';
@@ -99,7 +99,20 @@ function SettingsPage() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearConfirmText, setClearConfirmText] = useState('');
   const [isClearing, setIsClearing] = useState(false);
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const { showToast } = useToast();
+
+  // Load existing Telegram settings
+  const savedSettings = useLiveQuery(() => db.settings.toArray());
+  useEffect(() => {
+    if (savedSettings && savedSettings.length > 0) {
+      const settings = savedSettings[0];
+      if (settings?.telegramChatId) {
+        setTelegramChatId(settings.telegramChatId);
+      }
+    }
+  }, [savedSettings]);
 
   // ─── Import history data ───
   const cards = useLiveQuery(() => db.cards.toArray()) ?? [];
@@ -310,6 +323,78 @@ function SettingsPage() {
 
       {/* Cards section */}
       <CardManager />
+
+      {/* Notifications */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Notifications</h2>
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0">
+              <Bell size={18} className="text-blue-500" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-gray-900 dark:text-white">Telegram Notifications</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">
+                Get notified on Telegram when fixes are deployed. Enter your Telegram Chat ID to receive notifications.
+              </p>
+              <div className="flex gap-2 mt-3">
+                <input
+                  type="text"
+                  value={telegramChatId}
+                  onChange={(e) => setTelegramChatId(e.target.value)}
+                  placeholder="e.g. 123456789"
+                  className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                />
+                <button
+                  onClick={async () => {
+                    setIsSavingTelegram(true);
+                    try {
+                      const existing = await db.settings.toArray();
+                      const current = existing[0];
+                      if (current) {
+                        await db.settings.update(current.id, {
+                          telegramChatId: telegramChatId.trim() || undefined,
+                          updatedAt: new Date(),
+                        });
+                      } else {
+                        await db.settings.add({
+                          id: 'default',
+                          currency: 'USD',
+                          theme: 'system',
+                          telegramChatId: telegramChatId.trim() || undefined,
+                          createdAt: new Date(),
+                          updatedAt: new Date(),
+                        });
+                      }
+                      showToast(telegramChatId.trim() ? 'Telegram notifications enabled' : 'Telegram notifications disabled', 'success');
+                    } catch {
+                      showToast('Failed to save notification settings', 'error');
+                    } finally {
+                      setIsSavingTelegram(false);
+                    }
+                  }}
+                  disabled={isSavingTelegram}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50"
+                >
+                  {isSavingTelegram ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                  Save
+                </button>
+              </div>
+              {telegramChatId.trim() ? (
+                <div className="flex items-center gap-1.5 mt-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                  <span className="text-[11px] text-green-600 dark:text-green-400">Notifications enabled</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 mt-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-gray-300 dark:bg-gray-600" />
+                  <span className="text-[11px] text-gray-400 dark:text-gray-500">Not configured</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Import History & Statement Coverage */}
       <div>
