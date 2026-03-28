@@ -160,22 +160,15 @@ function createWorktree(projectDir: string, worktreeBase: string, branchName: st
   mkdirSync(worktreeBase, { recursive: true });
   const worktreePath = join(worktreeBase, branchName);
 
-  // Clean up stale worktree if it exists
   if (existsSync(worktreePath)) {
     try { shell(`git worktree remove --force '${worktreePath}'`, projectDir); } catch { /* ignore */ }
     try { rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 
-  // Fetch latest from remote (safe — doesn't touch working tree)
   shell('git fetch origin main', projectDir);
-
-  // Delete the branch if it exists from a previous attempt
   try { shell(`git branch -D '${branchName}'`, projectDir); } catch { /* ignore */ }
-
-  // Create worktree with new branch based on origin/main
   shell(`git worktree add -b '${branchName}' '${worktreePath}' origin/main`, projectDir);
 
-  // Install dependencies in worktree so Claude Code can run tests/build
   console.log('   📦 Installing dependencies in worktree...');
   shell('npm ci --ignore-scripts 2>/dev/null || npm install', worktreePath);
 
@@ -188,13 +181,9 @@ function removeWorktreeSync(projectDir: string, worktreePath: string): void {
   try { rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
-/** Fire-and-forget worktree cleanup — spawns a detached child process so we never block */
 function removeWorktreeAsync(projectDir: string, worktreePath: string): void {
   const script = `rm -rf '${worktreePath}/node_modules' && git -C '${projectDir}' worktree remove --force '${worktreePath}' 2>/dev/null; rm -rf '${worktreePath}' 2>/dev/null`;
-  const child = spawn('bash', ['-c', script], {
-    stdio: 'ignore',
-    detached: true,
-  });
+  const child = spawn('bash', ['-c', script], { stdio: 'ignore', detached: true });
   child.unref();
   console.log('   🧹 Worktree cleanup spawned in background');
 }
@@ -227,28 +216,28 @@ function invokeClaudeCode(worktreePath: string, module: string, issue: LocalIssu
   }
 
   const prompt = [
-    `Fix the following issue in the QuickFinance project.`,
-    `Focus on files within the "${module}" directory, but modify other src/ files if needed (e.g. App.tsx for layout/navigation changes).`,
+    `You are a code editor. Fix this issue in as few steps as possible.`,
     ``,
     `Issue #${issue.number}: ${issue.title}`,
+    issue.body ? `\nDetails: ${issue.body}` : '',
     ``,
-    issue.body,
+    `The relevant code is in "${module}". For navigation/tab/layout changes, edit src/App.tsx.`,
     ``,
-    `Important:`,
-    `- Make minimal, focused changes`,
-    `- Follow existing code patterns and conventions`,
-    `- Do not modify agent files or config files`,
-    `- Use TypeScript strict mode (noUncheckedIndexedAccess is enabled)`,
+    `Rules:`,
+    `- DO NOT explore the codebase extensively. Go directly to the file that needs changing.`,
+    `- Make the edit. Verify with one Read of the changed file. Done.`,
+    `- No more than 5-8 tool calls total.`,
+    `- Only touch src/ files. Never touch agents/, config, or .env files.`,
+    `- TypeScript strict mode is on (noUncheckedIndexedAccess).`,
+    `- If the issue is already fixed, exit immediately with no changes.`,
   ].join('\n');
 
   const promptFile = join(worktreePath, '.claude-prompt.tmp');
   writeFileSync(promptFile, prompt, 'utf-8');
 
   try {
-    // Drop --print so Claude Code runs its full interactive TUI
-    // stdio: 'inherit' gives it direct terminal access — user sees everything live
     execSync(
-      `${claudeBin} --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20 -p "$(cat '${promptFile}')"`,
+      `${claudeBin} --allowedTools "Edit,Read,Glob,Grep" --max-turns 10 -p "$(cat '${promptFile}')"`,
       {
         cwd: worktreePath,
         timeout: 300000,
@@ -284,12 +273,7 @@ async function createPullRequest(
       Accept: 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      title,
-      body,
-      head: branch,
-      base: 'main',
-    }),
+    body: JSON.stringify({ title, body, head: branch, base: 'main' }),
   });
 
   if (!res.ok) {
@@ -308,7 +292,6 @@ async function mergePullRequest(
   delayMs = 5000,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= retries; attempt++) {
-    // Check if PR is mergeable
     const checkRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
       headers: {
         Authorization: `Bearer ${githubToken}`,
@@ -324,7 +307,6 @@ async function mergePullRequest(
 
     const prData = await checkRes.json() as { mergeable: boolean | null; mergeable_state: string };
 
-    // GitHub needs time to compute mergeability — null means "still checking"
     if (prData.mergeable === null) {
       console.log(`   ⏳ Mergeability pending, attempt ${attempt}/${retries}...`);
       await new Promise((r) => setTimeout(r, delayMs));
@@ -336,7 +318,6 @@ async function mergePullRequest(
       return false;
     }
 
-    // Attempt squash merge
     const mergeRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`, {
       method: 'PUT',
       headers: {
@@ -344,9 +325,7 @@ async function mergePullRequest(
         Accept: 'application/vnd.github.v3+json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        merge_method: 'squash',
-      }),
+      body: JSON.stringify({ merge_method: 'squash' }),
     });
 
     if (mergeRes.ok) {
@@ -376,46 +355,26 @@ async function waitForDeployment(
 
   while (Date.now() < deadline) {
     try {
-      // Check deployment statuses for this commit via the deployments API
       const res = await fetch(
         `https://api.github.com/repos/${repo}/deployments?sha=${commitSha}&environment=github-pages&per_page=1`,
-        {
-          headers: {
-            Authorization: `Bearer ${githubToken}`,
-            Accept: 'application/vnd.github.v3+json',
-          },
-        },
+        { headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' } },
       );
 
       if (res.ok) {
         const deployments = (await res.json()) as Array<{ id: number }>;
         if (deployments.length > 0) {
           const deploymentId = deployments[0]!.id;
-
-          // Get the latest status for this deployment
           const statusRes = await fetch(
             `https://api.github.com/repos/${repo}/deployments/${deploymentId}/statuses?per_page=1`,
-            {
-              headers: {
-                Authorization: `Bearer ${githubToken}`,
-                Accept: 'application/vnd.github.v3+json',
-              },
-            },
+            { headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' } },
           );
 
           if (statusRes.ok) {
             const statuses = (await statusRes.json()) as Array<{ state: string }>;
             if (statuses.length > 0) {
               const state = statuses[0]!.state;
-              if (state === 'success') {
-                console.log(`   🚀 Deployment successful!`);
-                return true;
-              }
-              if (state === 'failure' || state === 'error') {
-                console.log(`   ❌ Deployment failed (state: ${state})`);
-                return false;
-              }
-              // 'pending', 'in_progress', 'queued' — keep polling
+              if (state === 'success') { console.log(`   🚀 Deployment successful!`); return true; }
+              if (state === 'failure' || state === 'error') { console.log(`   ❌ Deployment failed (state: ${state})`); return false; }
             }
           }
         }
@@ -437,10 +396,7 @@ async function getMergeCommitSha(
 ): Promise<string | null> {
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
-      headers: {
-        Authorization: `Bearer ${githubToken}`,
-        Accept: 'application/vnd.github.v3+json',
-      },
+      headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' },
     });
     if (res.ok) {
       const data = (await res.json()) as { merge_commit_sha: string | null };
@@ -450,7 +406,22 @@ async function getMergeCommitSha(
   return null;
 }
 
-// --- Delete Remote Branch ---
+// --- Telegram Notification ---
+async function notifyTelegram(message: string): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.ALLOWED_CHAT_IDS;
+  if (!token || !chatId) return;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'Markdown' }),
+    });
+  } catch { /* best effort — don't break the pipeline */ }
+}
+
+// --- Close GitHub Issue ---
 async function closeGitHubIssue(
   githubToken: string,
   repo: string,
@@ -475,18 +446,14 @@ async function closeGitHubIssue(
   return true;
 }
 
+// --- Delete Remote Branch ---
 async function deleteRemoteBranch(githubToken: string, repo: string, branch: string): Promise<void> {
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${branch}`, {
       method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${githubToken}`,
-        Accept: 'application/vnd.github.v3+json',
-      },
+      headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' },
     });
-    if (res.ok) {
-      console.log(`   🗑️  Deleted remote branch ${branch}`);
-    }
+    if (res.ok) { console.log(`   🗑️  Deleted remote branch ${branch}`); }
   } catch { /* best effort */ }
 }
 
@@ -505,7 +472,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     const module = detectAffectedModule(issue);
     console.log(`   📂 Affected module: ${module}`);
 
-    // 2. Create isolated worktree (never touches main working tree)
+    // 2. Create isolated worktree
     console.log(`   🌿 Creating worktree for ${branchName}...`);
     worktreePath = createWorktree(config.projectDir, config.worktreeBase, branchName);
     console.log(`   📁 Worktree: ${worktreePath}`);
@@ -531,7 +498,7 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     shell(`git push -u origin '${branchName}'`, worktreePath);
     console.log(`   📤 Pushed to ${branchName}`);
 
-    // 5. Create PR + auto-merge (run in parallel with branch cleanup later)
+    // 5. Create PR
     const prTitle = `fix: resolve #${issue.number} - ${issue.title}`;
     const prBody = [
       `## Auto-Resolved Issue`,
@@ -552,78 +519,80 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     const merged = await mergePullRequest(config.githubToken, config.githubRepo, pr.number);
     if (merged) {
       console.log(`   🔀 Issue #${issue.number} merged to main — awaiting deployment`);
-      // Fire-and-forget: delete remote branch, don't await
       deleteRemoteBranch(config.githubToken, config.githubRepo, branchName).catch(() => {});
-    }
 
-    // 7. Wait for GitHub Pages deployment to succeed before marking resolved
-    let deployed = false;
-    if (merged) {
+      // 7. Wait for GitHub Pages deployment
+      let deployed = false;
       const mergeCommitSha = await getMergeCommitSha(config.githubToken, config.githubRepo, pr.number);
       if (mergeCommitSha) {
         deployed = await waitForDeployment(config.githubToken, config.githubRepo, mergeCommitSha);
       } else {
         console.log(`   ⚠️  Could not get merge commit SHA — skipping deployment check`);
       }
-    }
 
-    // 8. Close the GitHub issue explicitly (squash merges may not trigger auto-close from PR body)
-    if (merged) {
+      // 8. Close the GitHub issue
       await closeGitHubIssue(config.githubToken, config.githubRepo, issue.number);
-    }
 
-    // 9. Update issue status — only "resolved" once deployment succeeds
-    if (deployed) {
-      issue.status = 'resolved';
-      issue.resolution = {
-        prNumber: pr.number,
-        prUrl: pr.html_url,
-        resolvedAt: new Date().toISOString(),
-        autoMerged: merged,
-      };
-      console.log(`   🎉 Issue #${issue.number} deployed successfully!`);
-    } else if (merged) {
-      // Merged but deployment failed/timed out — mark resolved but note deployment status
-      issue.status = 'resolved';
-      issue.resolution = {
-        prNumber: pr.number,
-        prUrl: pr.html_url,
-        resolvedAt: new Date().toISOString(),
-        autoMerged: merged,
-        error: 'Merged but deployment did not succeed — check GitHub Pages status',
-      };
-      console.log(`   ⚠️  Issue #${issue.number} merged but deployment did not confirm success`);
+      // 9. Notify on Telegram with deployment status
+      const siteUrl = `https://${config.githubRepo.split('/')[0]?.toLowerCase()}.github.io/${config.githubRepo.split('/')[1]}/`;
+      if (deployed) {
+        await notifyTelegram(
+          `✅ *Issue #${issue.number} resolved and deployed*\n\n` +
+          `*${issue.title}*\n` +
+          `PR: ${pr.html_url}\n` +
+          `🚀 Live: ${siteUrl}\n\n` +
+          `_Auto-resolved by QuickFinance Agent_`
+        );
+        issue.status = 'resolved';
+        issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: true };
+        console.log(`   🎉 Issue #${issue.number} deployed successfully!`);
+      } else {
+        await notifyTelegram(
+          `🔀 *Issue #${issue.number} merged but deployment unconfirmed*\n\n` +
+          `*${issue.title}*\n` +
+          `PR: ${pr.html_url}\n` +
+          `🌐 Site: ${siteUrl}\n\n` +
+          `_Check GitHub Pages status manually_`
+        );
+        issue.status = 'resolved';
+        issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: true, error: 'Deployment unconfirmed' };
+        console.log(`   ⚠️  Issue #${issue.number} merged but deployment did not confirm`);
+      }
     } else {
-      // PR not merged — leave as in_progress for manual review
+      // Merge failed — notify
+      await notifyTelegram(
+        `🔀 *Issue #${issue.number} — PR created*\n\n` +
+        `*${issue.title}*\n` +
+        `PR: ${pr.html_url}\n` +
+        `⚠️ Auto-merge failed — needs manual review`
+      );
       issue.status = 'in_progress';
-      issue.resolution = {
-        prNumber: pr.number,
-        prUrl: pr.html_url,
-        resolvedAt: new Date().toISOString(),
-        autoMerged: false,
-      };
+      issue.resolution = { prNumber: pr.number, prUrl: pr.html_url, resolvedAt: new Date().toISOString(), autoMerged: false };
       console.log(`   ⚠️  Issue #${issue.number} PR created but not merged — manual review needed`);
     }
+
     updateIssue(config.issuesDir, issue);
     console.log(`   ✅ Done — moving to next issue\n`);
 
-    // 10. Worktree cleanup in background — never blocks the pipeline
+    // 10. Worktree cleanup in background
     if (worktreePath) {
       removeWorktreeAsync(config.projectDir, worktreePath);
-      worktreePath = ''; // prevent finally block from doing sync cleanup
+      worktreePath = '';
     }
 
   } catch (err: any) {
     console.error(`   ❌ Failed: ${err.message}`);
 
+    await notifyTelegram(
+      `❌ *Issue #${issue.number} failed to resolve*\n\n` +
+      `*${issue.title}*\n` +
+      `Error: ${err.message.slice(0, 200)}`
+    );
+
     issue.status = 'pending';
-    issue.resolution = {
-      error: err.message,
-      resolvedAt: new Date().toISOString(),
-    };
+    issue.resolution = { error: err.message, resolvedAt: new Date().toISOString() };
     updateIssue(config.issuesDir, issue);
 
-    // On failure, do sync cleanup since we might retry soon and need a clean slate
     if (worktreePath) {
       console.log('   🧹 Cleaning up worktree...');
       removeWorktreeSync(config.projectDir, worktreePath);
@@ -631,7 +600,6 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     }
 
   } finally {
-    // Safety net — only runs if something unexpected skipped both paths above
     if (worktreePath) {
       removeWorktreeAsync(config.projectDir, worktreePath);
     }
