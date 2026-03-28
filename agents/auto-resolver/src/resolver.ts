@@ -363,6 +363,93 @@ async function mergePullRequest(
   return false;
 }
 
+// --- Wait for GitHub Pages Deployment ---
+async function waitForDeployment(
+  githubToken: string,
+  repo: string,
+  commitSha: string,
+  maxWaitMs = 300_000,
+  pollMs = 15_000,
+): Promise<boolean> {
+  const deadline = Date.now() + maxWaitMs;
+  console.log(`   ⏳ Waiting for GitHub Pages deployment (commit ${commitSha.slice(0, 7)})...`);
+
+  while (Date.now() < deadline) {
+    try {
+      // Check deployment statuses for this commit via the deployments API
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/deployments?sha=${commitSha}&environment=github-pages&per_page=1`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubToken}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        },
+      );
+
+      if (res.ok) {
+        const deployments = (await res.json()) as Array<{ id: number }>;
+        if (deployments.length > 0) {
+          const deploymentId = deployments[0]!.id;
+
+          // Get the latest status for this deployment
+          const statusRes = await fetch(
+            `https://api.github.com/repos/${repo}/deployments/${deploymentId}/statuses?per_page=1`,
+            {
+              headers: {
+                Authorization: `Bearer ${githubToken}`,
+                Accept: 'application/vnd.github.v3+json',
+              },
+            },
+          );
+
+          if (statusRes.ok) {
+            const statuses = (await statusRes.json()) as Array<{ state: string }>;
+            if (statuses.length > 0) {
+              const state = statuses[0]!.state;
+              if (state === 'success') {
+                console.log(`   🚀 Deployment successful!`);
+                return true;
+              }
+              if (state === 'failure' || state === 'error') {
+                console.log(`   ❌ Deployment failed (state: ${state})`);
+                return false;
+              }
+              // 'pending', 'in_progress', 'queued' — keep polling
+            }
+          }
+        }
+      }
+    } catch { /* network hiccup — retry */ }
+
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  console.log(`   ⚠️  Deployment timed out after ${maxWaitMs / 1000}s`);
+  return false;
+}
+
+// --- Get merge commit SHA ---
+async function getMergeCommitSha(
+  githubToken: string,
+  repo: string,
+  prNumber: number,
+): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+      },
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { merge_commit_sha: string | null };
+      return data.merge_commit_sha;
+    }
+  } catch { /* best effort */ }
+  return null;
+}
+
 // --- Delete Remote Branch ---
 async function deleteRemoteBranch(githubToken: string, repo: string, branch: string): Promise<void> {
   try {
@@ -440,23 +527,58 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     // 6. Auto-merge the PR
     const merged = await mergePullRequest(config.githubToken, config.githubRepo, pr.number);
     if (merged) {
-      console.log(`   🎉 Issue #${issue.number} fully resolved and merged to main`);
+      console.log(`   🔀 Issue #${issue.number} merged to main — awaiting deployment`);
       // Fire-and-forget: delete remote branch, don't await
       deleteRemoteBranch(config.githubToken, config.githubRepo, branchName).catch(() => {});
     }
 
-    // 7. Update issue status — this is the "done" signal, log it prominently
-    issue.status = 'resolved';
-    issue.resolution = {
-      prNumber: pr.number,
-      prUrl: pr.html_url,
-      resolvedAt: new Date().toISOString(),
-      autoMerged: merged,
-    };
+    // 7. Wait for GitHub Pages deployment to succeed before marking resolved
+    let deployed = false;
+    if (merged) {
+      const mergeCommitSha = await getMergeCommitSha(config.githubToken, config.githubRepo, pr.number);
+      if (mergeCommitSha) {
+        deployed = await waitForDeployment(config.githubToken, config.githubRepo, mergeCommitSha);
+      } else {
+        console.log(`   ⚠️  Could not get merge commit SHA — skipping deployment check`);
+      }
+    }
+
+    // 8. Update issue status — only "resolved" once deployment succeeds
+    if (deployed) {
+      issue.status = 'resolved';
+      issue.resolution = {
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        resolvedAt: new Date().toISOString(),
+        autoMerged: merged,
+      };
+      console.log(`   🎉 Issue #${issue.number} deployed successfully!`);
+    } else if (merged) {
+      // Merged but deployment failed/timed out — mark resolved but note deployment status
+      issue.status = 'resolved';
+      issue.resolution = {
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        resolvedAt: new Date().toISOString(),
+        autoMerged: merged,
+        error: 'Merged but deployment did not succeed — check GitHub Pages status',
+      };
+      console.log(`   ⚠️  Issue #${issue.number} merged but deployment did not confirm success`);
+    } else {
+      // PR not merged — leave as in_progress for manual review
+      issue.status = 'in_progress';
+      issue.resolution = {
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        resolvedAt: new Date().toISOString(),
+        autoMerged: false,
+      };
+      console.log(`   ⚠️  Issue #${issue.number} PR created but not merged — manual review needed`);
+    }
     updateIssue(config.issuesDir, issue);
     console.log(`   ✅ Done — moving to next issue\n`);
 
-    // 8. Worktree cleanup in background — never blocks the pipeline
+    // 9. Worktree cleanup in background — never blocks the pipeline
     if (worktreePath) {
       removeWorktreeAsync(config.projectDir, worktreePath);
       worktreePath = ''; // prevent finally block from doing sync cleanup
