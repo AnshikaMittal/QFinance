@@ -61,6 +61,7 @@ interface LocalIssue {
     prUrl?: string;
     resolvedAt?: string;
     error?: string;
+    autoMerged?: boolean;
   };
 }
 
@@ -232,14 +233,15 @@ function invokeClaudeCode(worktreePath: string, module: string, issue: LocalIssu
   writeFileSync(promptFile, prompt, 'utf-8');
 
   try {
+    // Drop --print so Claude Code runs its full interactive TUI
+    // stdio: 'inherit' gives it direct terminal access — user sees everything live
     execSync(
-      `${claudeBin} --print --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20 < "${promptFile}"`,
+      `${claudeBin} --allowedTools "Edit,Write,Read,Glob,Grep,Bash" --max-turns 20 -p "$(cat '${promptFile}')"`,
       {
         cwd: worktreePath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'inherit', 'inherit'],
         timeout: 300000,
         shell: '/bin/bash',
+        stdio: 'inherit',
         env: {
           ...process.env,
           PATH: `${process.env.HOME}/.claude/bin:${process.env.HOME}/.npm-global/bin:/usr/local/bin:${process.env.PATH}`,
@@ -283,6 +285,86 @@ async function createPullRequest(
   }
 
   return res.json() as Promise<{ number: number; html_url: string }>;
+}
+
+// --- Auto-Merge PR ---
+async function mergePullRequest(
+  githubToken: string,
+  repo: string,
+  prNumber: number,
+  retries = 5,
+  delayMs = 5000,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    // Check if PR is mergeable
+    const checkRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+      },
+    });
+
+    if (!checkRes.ok) {
+      console.log(`   ⏳ Merge check failed (${checkRes.status}), attempt ${attempt}/${retries}`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      continue;
+    }
+
+    const prData = await checkRes.json() as { mergeable: boolean | null; mergeable_state: string };
+
+    // GitHub needs time to compute mergeability — null means "still checking"
+    if (prData.mergeable === null) {
+      console.log(`   ⏳ Mergeability pending, attempt ${attempt}/${retries}...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      continue;
+    }
+
+    if (!prData.mergeable) {
+      console.log(`   ⚠️  PR is not mergeable (state: ${prData.mergeable_state}), skipping auto-merge`);
+      return false;
+    }
+
+    // Attempt squash merge
+    const mergeRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        merge_method: 'squash',
+      }),
+    });
+
+    if (mergeRes.ok) {
+      console.log(`   🔀 PR #${prNumber} auto-merged (squash)`);
+      return true;
+    }
+
+    const errBody = await mergeRes.text();
+    console.log(`   ⏳ Merge attempt ${attempt}/${retries} failed (${mergeRes.status}): ${errBody}`);
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  console.log(`   ⚠️  Auto-merge failed after ${retries} attempts — PR remains open for manual review`);
+  return false;
+}
+
+// --- Delete Remote Branch ---
+async function deleteRemoteBranch(githubToken: string, repo: string, branch: string): Promise<void> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/git/refs/heads/${branch}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+      },
+    });
+    if (res.ok) {
+      console.log(`   🗑️  Deleted remote branch ${branch}`);
+    }
+  } catch { /* best effort */ }
 }
 
 // --- Resolve Issue ---
@@ -343,12 +425,19 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
     const pr = await createPullRequest(config.githubToken, config.githubRepo, prTitle, prBody, branchName);
     console.log(`   ✅ PR #${pr.number}: ${pr.html_url}`);
 
-    // 6. Update issue status
+    // 6. Auto-merge the PR
+    const merged = await mergePullRequest(config.githubToken, config.githubRepo, pr.number);
+    if (merged) {
+      await deleteRemoteBranch(config.githubToken, config.githubRepo, branchName);
+    }
+
+    // 7. Update issue status
     issue.status = 'resolved';
     issue.resolution = {
       prNumber: pr.number,
       prUrl: pr.html_url,
       resolvedAt: new Date().toISOString(),
+      autoMerged: merged,
     };
     updateIssue(config.issuesDir, issue);
 
