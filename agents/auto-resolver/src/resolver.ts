@@ -183,6 +183,8 @@ function createWorktree(projectDir: string, worktreeBase: string, branchName: st
 }
 
 function removeWorktree(projectDir: string, worktreePath: string): void {
+  // Nuke node_modules first — rmSync on thousands of tiny files is glacially slow
+  try { execSync(`rm -rf '${worktreePath}/node_modules'`, { stdio: 'pipe', timeout: 30000 }); } catch { /* ignore */ }
   try { shell(`git worktree remove --force '${worktreePath}'`, projectDir); } catch { /* ignore */ }
   try { rmSync(worktreePath, { recursive: true, force: true }); } catch { /* ignore */ }
 }
