@@ -23,7 +23,31 @@
 
 import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// Load .env from project root
+function loadEnv(): void {
+  const __dir = dirname(fileURLToPath(import.meta.url));
+  for (const envPath of [resolve(__dir, '..', '.env'), resolve(__dir, '..', '..', '..', '.env')]) {
+    try {
+      const content = readFileSync(envPath, 'utf-8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIndex = trimmed.indexOf('=');
+        if (eqIndex === -1) continue;
+        const key = trimmed.slice(0, eqIndex).trim();
+        const value = trimmed.slice(eqIndex + 1).trim();
+        if (!process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+    } catch { /* skip if not found */ }
+  }
+}
+
+loadEnv();
 
 interface LocalIssue {
   number: number;
@@ -57,7 +81,8 @@ function getConfig() {
     process.exit(1);
   }
 
-  const issuesDir = process.env.ISSUES_DIR ?? join(__dirname, '..', '..', 'issue-poller', 'issues');
+  const __dir = dirname(fileURLToPath(import.meta.url));
+  const issuesDir = process.env.ISSUES_DIR ?? join(__dir, '..', '..', 'issue-poller', 'issues');
   const pollInterval = parseInt(process.env.POLL_INTERVAL ?? '60', 10);
 
   return { githubToken, githubRepo, projectDir, issuesDir, pollInterval };

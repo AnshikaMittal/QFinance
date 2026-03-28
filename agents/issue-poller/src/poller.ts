@@ -12,7 +12,32 @@
  */
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// Load .env from project root
+function loadEnv(): void {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  // Try agent-level .env first, then project root .env
+  for (const envPath of [resolve(__dirname, '..', '.env'), resolve(__dirname, '..', '..', '..', '.env')]) {
+    try {
+      const content = readFileSync(envPath, 'utf-8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIndex = trimmed.indexOf('=');
+        if (eqIndex === -1) continue;
+        const key = trimmed.slice(0, eqIndex).trim();
+        const value = trimmed.slice(eqIndex + 1).trim();
+        if (!process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+    } catch { /* skip if not found */ }
+  }
+}
+
+loadEnv();
 
 interface GitHubIssue {
   number: number;
