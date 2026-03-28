@@ -63,7 +63,7 @@ const DEFAULT_CATEGORIES: Omit<Category, 'id' | 'createdAt'>[] = [
     // DoorDash / Uber Eats grocery orders (longer match beats generic "doordash" in Dining)
     'doordash safeway', 'doordash kroger', 'doordash albertsons', 'doordash whole foods',
     'doordash walmart', 'doordash costco', 'doordash target', 'doordash heb',
-    'doordash qfc', 'doordash fred meyer',
+    'doordash qfc', 'dd doordash qfc', 'doordash fred meyer',
     'doordash publix', 'doordash meijer', 'doordash aldi', 'doordash sprouts',
     'doordash grocery', 'dd grocery', 'uber eats grocery',
     'grubhub grocery', 'dashpass grocery',
