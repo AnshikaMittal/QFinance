@@ -187,7 +187,11 @@ export function parseAppleCardPDF(lines: string[], cardId: string): CSVImportRes
         const month = parseInt(parts[0] ?? '0', 10);
         const day = parseInt(parts[1] ?? '0', 10);
         if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-          date = new Date(year, month - 1, day);
+          const candidate = new Date(year, month - 1, day);
+          // Validate the date didn't overflow (e.g. Feb 31 → Mar 3)
+          if (candidate.getMonth() === month - 1 && candidate.getDate() === day) {
+            date = candidate;
+          }
         }
         description = match[2] ?? '';
         amountStr = match[3] ?? '';

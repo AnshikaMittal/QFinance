@@ -4,10 +4,13 @@ const APPLE_HEADERS = ['Transaction Date', 'Clearing Date', 'Description', 'Merc
 
 export function isAppleCardFormat(headers: string[]): boolean {
   const normalized = headers.map(h => h.trim().toLowerCase());
-  // Use startsWith matching so "Amount (USD)" matches "amount"
-  return APPLE_HEADERS.every(h =>
-    normalized.some(n => n.startsWith(h.toLowerCase()) || h.toLowerCase().startsWith(n))
-  );
+  // Match each expected header: exact match or CSV header starts with expected header
+  // (e.g. "amount (usd)" startsWith "amount"). Don't check the reverse —
+  // "amount" startsWith "a" would match "A" as a header, causing false positives.
+  return APPLE_HEADERS.every(expected => {
+    const lowerExpected = expected.toLowerCase();
+    return normalized.some(n => n === lowerExpected || n.startsWith(lowerExpected));
+  });
 }
 
 export function parseAppleCardCSV(csvRows: string[][], cardId: string): CSVImportResult {
@@ -21,6 +24,17 @@ export function parseAppleCardCSV(csvRows: string[][], cardId: string): CSVImpor
   const categoryIdx = headers.indexOf('category');
   const typeIdx = headers.indexOf('type');
   const amountIdx = headers.findIndex(h => h.includes('amount'));
+
+  // Bail early if required columns are missing — prevents row[-1] access
+  if (dateIdx === -1 || descIdx === -1 || amountIdx === -1) {
+    return {
+      transactions: [],
+      duplicatesSkipped: 0,
+      parseErrors: [`Missing required columns: ${[dateIdx === -1 && 'Transaction Date', descIdx === -1 && 'Description', amountIdx === -1 && 'Amount'].filter(Boolean).join(', ')}`],
+      parserUsed: 'apple-card',
+      detectedCard: { issuer: 'apple', lastFour: '', name: 'Apple Card', color: '#1f2937' },
+    };
+  }
 
   for (let i = 1; i < csvRows.length; i++) {
     const row = csvRows[i];

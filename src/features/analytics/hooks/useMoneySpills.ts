@@ -57,34 +57,44 @@ export function useMoneySpills(options?: UseMoneySpillsOptions) {
 
   useEffect(() => {
     runDetection();
-  }, [allTransactions.length, monthKey]);
+  }, [runDetection]);
 
   const dismissSpill = useCallback(
     async (spillId: string) => {
-      const spill = spills.find(s => s.id === spillId);
-      if (spill) {
-        await db.moneySpills.put({ ...spill, isDismissed: true });
-        setSpills(prev => prev.filter(s => s.id !== spillId));
+      // Use functional setState to avoid stale closure over `spills`
+      let spillToUpdate: MoneySpill | undefined;
+      setSpills(prev => {
+        spillToUpdate = prev.find(s => s.id === spillId);
+        return prev.filter(s => s.id !== spillId);
+      });
+      if (spillToUpdate) {
+        await db.moneySpills.put({ ...spillToUpdate, isDismissed: true });
       }
     },
-    [spills],
+    [],
   );
 
   const resolveSpill = useCallback(
     async (spillId: string, resolution: SpillResolution, note?: string) => {
-      const spill = spills.find(s => s.id === spillId);
-      if (spill) {
-        const updated: MoneySpill = {
-          ...spill,
-          resolution,
-          resolvedAt: resolution !== 'unresolved' ? new Date() : undefined,
-          resolutionNote: note || spill.resolutionNote,
-        };
-        await db.moneySpills.put(updated);
-        setSpills(prev => prev.map(s => s.id === spillId ? updated : s));
+      // Use functional setState to avoid stale closure over `spills`
+      let updatedSpill: MoneySpill | undefined;
+      setSpills(prev => prev.map(s => {
+        if (s.id === spillId) {
+          updatedSpill = {
+            ...s,
+            resolution,
+            resolvedAt: resolution !== 'unresolved' ? new Date() : undefined,
+            resolutionNote: note || s.resolutionNote,
+          };
+          return updatedSpill;
+        }
+        return s;
+      }));
+      if (updatedSpill) {
+        await db.moneySpills.put(updatedSpill);
       }
     },
-    [spills],
+    [],
   );
 
   const activeSpills = spills.filter(s => !s.isDismissed);

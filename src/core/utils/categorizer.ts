@@ -80,15 +80,24 @@ export async function recategorizeAll(): Promise<{ updated: number; total: numbe
   const categories = await db.categories.toArray();
   const transactions = await db.transactions.toArray();
 
-  let updated = 0;
+  const now = new Date();
+  const updates: Array<{ id: string; categoryId: string; updatedAt: Date }> = [];
 
   for (const txn of transactions) {
     const newCategoryId = autoCategorize(txn.merchant, txn.description, categories);
     if (newCategoryId && newCategoryId !== txn.categoryId) {
-      await db.transactions.update(txn.id, { categoryId: newCategoryId, updatedAt: new Date() });
-      updated++;
+      updates.push({ id: txn.id, categoryId: newCategoryId, updatedAt: now });
     }
   }
 
-  return { updated, total: transactions.length };
+  // Batch update instead of N individual writes
+  if (updates.length > 0) {
+    await db.transaction('rw', db.transactions, async () => {
+      for (const u of updates) {
+        await db.transactions.update(u.id, { categoryId: u.categoryId, updatedAt: u.updatedAt });
+      }
+    });
+  }
+
+  return { updated: updates.length, total: transactions.length };
 }

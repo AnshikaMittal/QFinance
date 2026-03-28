@@ -22,9 +22,15 @@ export function TransactionForm({ isOpen, onClose, onSubmit, initial }: Transact
   const [merchant, setMerchant] = useState(initial?.merchant ?? '');
   const [categoryId, setCategoryId] = useState(initial?.categoryId ?? '');
   const [cardId, setCardId] = useState(initial?.cardId ?? '');
-  const [date, setDate] = useState(
-    initial?.date ? new Date(initial.date).toISOString().split('T')[0] ?? '' : new Date().toISOString().split('T')[0] ?? ''
-  );
+  const [date, setDate] = useState(() => {
+    try {
+      if (initial?.date) {
+        const d = new Date(initial.date);
+        if (!isNaN(d.getTime())) return d.toISOString().split('T')[0] ?? '';
+      }
+    } catch { /* invalid date — fall through */ }
+    return new Date().toISOString().split('T')[0] ?? '';
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -38,7 +44,7 @@ export function TransactionForm({ isOpen, onClose, onSubmit, initial }: Transact
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
-    if (!amount || parseFloat(amount) <= 0) newErrors['amount'] = 'Enter a valid amount';
+    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) newErrors['amount'] = 'Enter a valid amount';
     if (!description.trim()) newErrors['description'] = 'Required';
     if (!date) newErrors['date'] = 'Required';
     setErrors(newErrors);

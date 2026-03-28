@@ -19,6 +19,17 @@ export function parseChaseCSV(csvRows: string[][], cardId: string): CSVImportRes
   const typeIdx = headers.indexOf('type');
   const amountIdx = headers.indexOf('amount');
 
+  // Bail early if required columns are missing — prevents row[-1] access
+  if (dateIdx === -1 || descIdx === -1 || amountIdx === -1) {
+    return {
+      transactions: [],
+      duplicatesSkipped: 0,
+      parseErrors: [`Missing required columns: ${[dateIdx === -1 && 'Transaction Date', descIdx === -1 && 'Description', amountIdx === -1 && 'Amount'].filter(Boolean).join(', ')}`],
+      parserUsed: 'chase',
+      detectedCard: { issuer: 'chase', lastFour: '', name: 'Chase Card', color: '#1e40af' },
+    };
+  }
+
   for (let i = 1; i < csvRows.length; i++) {
     const row = csvRows[i];
     if (!row || row.length < CHASE_HEADERS.length) {

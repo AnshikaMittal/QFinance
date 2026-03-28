@@ -87,5 +87,12 @@ function getBudgetPeriodRange(budget: Budget): { start: Date; end: Date } {
       const end = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
       return { start, end };
     }
+    default: {
+      // Fallback to monthly if an unexpected period type appears
+      const _exhaustive: never = budget.period;
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      return { start, end };
+    }
   }
 }

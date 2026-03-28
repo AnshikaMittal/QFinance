@@ -79,6 +79,9 @@ function detectDuplicates(debits: Transaction[], cfg: DetectionConfig): MoneySpi
     const t1 = sorted[i];
     if (!t1 || seen.has(t1.id)) continue;
 
+    // Skip zero-amount transactions — can't compare ratios and they're not meaningful duplicates
+    if (t1.amount === 0) continue;
+
     const duplicateGroup: Transaction[] = [t1];
 
     for (let j = i + 1; j < sorted.length; j++) {
@@ -154,14 +157,15 @@ function detectForgottenSubscriptions(debits: Transaction[], cfg: DetectionConfi
     if (isRecurring) {
       const first = sorted[0];
       if (!first) continue;
-      const monthlyAmount = avgInterval >= 25 ? first.amount : first.amount * 4;
+      // Weekly: 52 charges/year, Monthly: 12 charges/year
+      const yearlyAmount = avgInterval >= 25 ? first.amount * 12 : first.amount * 52;
 
       spills.push({
         id: uuidv4(),
         type: 'subscription-forgotten',
         description: `Recurring charge: ${first.merchant || first.description} — ${formatAmount(first.amount)} every ~${Math.round(avgInterval)} days (${group.length} occurrences)`,
         transactions: group.map(t => t.id),
-        estimatedWaste: monthlyAmount * 12,
+        estimatedWaste: yearlyAmount,
         period: `${Math.round(avgInterval)} day cycle`,
         isDismissed: false,
         resolution: 'unresolved',
@@ -192,6 +196,10 @@ function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, catego
 
   if (previous.length === 0) return spills;
 
+  // Count how many distinct months actually have data (don't assume 3)
+  const prevMonths = new Set(previous.map(t => `${t.date.getFullYear()}-${t.date.getMonth()}`));
+  const monthCount = Math.max(prevMonths.size, 1);
+
   // Group by category
   const currentByCategory = groupByCategory(current);
   const previousByCategory = groupByCategory(previous);
@@ -200,7 +208,7 @@ function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, catego
     const prevAmount = previousByCategory[categoryId];
     if (!prevAmount || prevAmount === 0) continue;
 
-    const monthlyAvg = prevAmount / 3; // 3-month average
+    const monthlyAvg = prevAmount / monthCount;
     const increase = (currentAmount - monthlyAvg) / monthlyAvg;
 
     if (increase >= cfg.spendingCreepThreshold && currentAmount > 50) {
@@ -224,13 +232,10 @@ function detectSpendingCreep(debits: Transaction[], cfg: DetectionConfig, catego
 
 function detectImpulseSpending(debits: Transaction[], cfg: DetectionConfig): MoneySpill[] {
   const lateNight = debits.filter(t => {
+    // Skip imported transactions — their times are unreliable (CSV/PDF default to midnight or noon)
+    if (t.importSource === 'csv' || t.importSource === 'pdf') return false;
+
     const hour = t.date.getHours();
-    const minutes = t.date.getMinutes();
-    const seconds = t.date.getSeconds();
-
-    // Skip transactions with no real time data (imported from CSV/PDF default to midnight = 00:00:00)
-    if (hour === 0 && minutes === 0 && seconds === 0) return false;
-
     return (hour >= cfg.impulseHourStart || hour < cfg.impulseHourEnd) && t.amount >= cfg.impulseMinAmount;
   });
 

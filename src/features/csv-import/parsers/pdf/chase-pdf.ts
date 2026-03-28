@@ -78,13 +78,13 @@ export function parseChasePDF(lines: string[], cardId: string): CSVImportResult 
     // Detect section headers (only match short header-like lines, not transaction lines)
     const lowerLine = line.toLowerCase();
     if (!TRANSACTION_LINE.test(line) && !SINGLE_DATE_LINE.test(line)) {
-      if (lowerLine.includes('payment') && lowerLine.includes('credit') ||
+      if ((lowerLine.includes('payment') && lowerLine.includes('credit')) ||
           lowerLine === 'payments and other credits') {
         inPayments = true;
         continue;
       }
       if (lowerLine === 'purchases' || lowerLine === 'purchase' ||
-          lowerLine.includes('transaction') && lowerLine.includes('detail')) {
+          (lowerLine.includes('transaction') && lowerLine.includes('detail'))) {
         inPayments = false;
         continue;
       }
@@ -188,7 +188,11 @@ function parseDate(mmdd: string, year: number): Date | null {
 
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
 
-  return new Date(year, month - 1, day);
+  const candidate = new Date(year, month - 1, day);
+  // Validate the date didn't overflow (e.g. Feb 31 → Mar 3)
+  if (candidate.getMonth() !== month - 1 || candidate.getDate() !== day) return null;
+
+  return candidate;
 }
 
 function parseAmount(str: string): number {
