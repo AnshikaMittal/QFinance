@@ -107,8 +107,29 @@ function commit(cwd: string, message: string): string {
   return git(cwd, 'rev-parse', '--short', 'HEAD');
 }
 
-function push(cwd: string, branch: string): void {
-  git(cwd, 'push', '-u', 'origin', branch);
+function push(cwd: string, branch: string, retries = 3): void {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      git(cwd, 'push', '-u', 'origin', branch);
+      return;
+    } catch (err: any) {
+      const msg = err.message ?? '';
+      if (msg.includes('fetch first') || msg.includes('non-fast-forward') || msg.includes('rejected')) {
+        console.log(`  🔄 Remote has new commits — rebasing (attempt ${attempt}/${retries})...`);
+        try {
+          git(cwd, 'pull', '--rebase', 'origin', branch);
+        } catch (pullErr: any) {
+          // If rebase fails due to conflict, abort and rethrow
+          try { git(cwd, 'rebase', '--abort'); } catch { /* ignore */ }
+          throw new Error(`Rebase failed: ${pullErr.message}`);
+        }
+        // Retry push after successful rebase
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`Push failed after ${retries} rebase attempts — remote keeps advancing`);
 }
 
 function createFeatureBranch(cwd: string, name: string): string {
