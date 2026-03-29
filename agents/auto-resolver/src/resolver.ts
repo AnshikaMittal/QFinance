@@ -56,6 +56,7 @@ interface LocalIssue {
   createdAt: string;
   updatedAt: string;
   fetchedAt: string;
+  failCount?: number; // Track consecutive failures to prevent infinite retries
   resolution?: {
     prNumber?: number;
     prUrl?: string;
@@ -64,6 +65,8 @@ interface LocalIssue {
     autoMerged?: boolean;
   };
 }
+
+const MAX_RETRIES = 3; // Stop retrying after this many consecutive failures
 
 // --- Config ---
 function getConfig() {
@@ -107,6 +110,48 @@ function getPendingIssues(issuesDir: string): LocalIssue[] {
 function updateIssue(issuesDir: string, issue: LocalIssue): void {
   const filePath = join(issuesDir, `issue-${issue.number}.json`);
   writeFileSync(filePath, JSON.stringify(issue, null, 2), 'utf-8');
+}
+
+// --- Meta-Issue Detection ---
+// Meta-issues are auto-created failure issues that reference an original issue
+const META_PREFIXES = ['[Deployment Failure]', '[Resolution Failure]', '[Merge Failure]'];
+
+function isMetaIssue(issue: LocalIssue): boolean {
+  return META_PREFIXES.some(prefix => issue.title.startsWith(prefix));
+}
+
+/**
+ * Extract the original issue number from a meta-issue title or body.
+ * e.g. "[Resolution Failure]: Auto-resolver failed to fix #34 — ..." → 34
+ */
+function extractReferencedIssueNumber(issue: LocalIssue): number | null {
+  // Match #NN in title
+  const titleMatch = issue.title.match(/#(\d+)/);
+  if (titleMatch?.[1]) return parseInt(titleMatch[1], 10);
+  // Match in body
+  const bodyMatch = issue.body.match(/issue\s*#(\d+)/i);
+  if (bodyMatch?.[1]) return parseInt(bodyMatch[1], 10);
+  return null;
+}
+
+/**
+ * Check if a GitHub issue is closed.
+ */
+async function isGitHubIssueClosed(
+  githubToken: string,
+  repo: string,
+  issueNumber: number,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/issues/${issueNumber}`, {
+      headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github.v3+json' },
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { state: string };
+    return data.state === 'closed';
+  } catch {
+    return false;
+  }
 }
 
 // --- Module Detection ---
@@ -583,6 +628,26 @@ async function fetchBuildError(
   }
 }
 
+// --- Add Comment to GitHub Issue ---
+async function addGitHubComment(
+  githubToken: string,
+  repo: string,
+  issueNumber: number,
+  body: string,
+): Promise<void> {
+  try {
+    await fetch(`https://api.github.com/repos/${repo}/issues/${issueNumber}/comments`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ body }),
+    });
+  } catch { /* best effort */ }
+}
+
 // --- Delete Remote Branch ---
 async function deleteRemoteBranch(githubToken: string, repo: string, branch: string): Promise<void> {
   try {
@@ -597,6 +662,55 @@ async function deleteRemoteBranch(githubToken: string, repo: string, branch: str
 // --- Resolve Issue ---
 async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIssue): Promise<void> {
   console.log(`\n🔧 Resolving #${issue.number}: ${issue.title}`);
+
+  // --- Pre-check 1: Retry limit ---
+  const failCount = issue.failCount ?? 0;
+  if (failCount >= MAX_RETRIES) {
+    console.log(`   ⏭️  Skipping #${issue.number} — failed ${failCount} times, marking as skipped`);
+    issue.status = 'skipped';
+    updateIssue(config.issuesDir, issue);
+    // Close on GitHub with a comment
+    await closeGitHubIssue(config.githubToken, config.githubRepo, issue.number);
+    await addGitHubComment(
+      config.githubToken,
+      config.githubRepo,
+      issue.number,
+      `🤖 **Auto-resolver skipped this issue** after ${failCount} failed attempts.\n\nThe auto-resolver was unable to produce a fix. This may need manual attention.\n\n_Last error: ${issue.resolution?.error ?? 'unknown'}_`,
+    );
+    return;
+  }
+
+  // --- Pre-check 2: Meta-issue — check if underlying issue is already resolved ---
+  if (isMetaIssue(issue)) {
+    const refNumber = extractReferencedIssueNumber(issue);
+    if (refNumber) {
+      const refClosed = await isGitHubIssueClosed(config.githubToken, config.githubRepo, refNumber);
+      if (refClosed) {
+        console.log(`   ✅ Meta-issue #${issue.number} — underlying issue #${refNumber} is already closed. Closing this one.`);
+        issue.status = 'resolved';
+        issue.resolution = { resolvedAt: new Date().toISOString(), error: `Underlying issue #${refNumber} already resolved` };
+        updateIssue(config.issuesDir, issue);
+        await closeGitHubIssue(config.githubToken, config.githubRepo, issue.number);
+        await addGitHubComment(
+          config.githubToken,
+          config.githubRepo,
+          issue.number,
+          `🤖 **Auto-closed** — the underlying issue #${refNumber} has already been resolved.`,
+        );
+        return;
+      }
+    }
+  }
+
+  // --- Pre-check 3: Check if this issue was closed on GitHub by a human ---
+  const isClosed = await isGitHubIssueClosed(config.githubToken, config.githubRepo, issue.number);
+  if (isClosed) {
+    console.log(`   ✅ Issue #${issue.number} was closed on GitHub — marking as resolved locally`);
+    issue.status = 'resolved';
+    issue.resolution = { resolvedAt: new Date().toISOString() };
+    updateIssue(config.issuesDir, issue);
+    return;
+  }
 
   issue.status = 'in_progress';
   updateIssue(config.issuesDir, issue);
@@ -847,9 +961,23 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
       (resFailIssue ? `\n🐛 Follow-up issue: #${resFailIssue.number}` : '')
     );
 
-    issue.status = 'pending';
+    issue.failCount = (issue.failCount ?? 0) + 1;
+    issue.status = issue.failCount >= MAX_RETRIES ? 'skipped' : 'pending';
     issue.resolution = { error: errorMsg, resolvedAt: new Date().toISOString() };
     updateIssue(config.issuesDir, issue);
+
+    if (issue.status === 'skipped') {
+      console.log(`   ⛔ Issue #${issue.number} reached max retries (${MAX_RETRIES}) — marked as skipped`);
+      await closeGitHubIssue(config.githubToken, config.githubRepo, issue.number);
+      await addGitHubComment(
+        config.githubToken,
+        config.githubRepo,
+        issue.number,
+        `🤖 **Auto-resolver gave up** after ${issue.failCount} failed attempts.\n\nLast error: \`${errorMsg.slice(0, 300)}\`\n\nThis issue needs manual attention.`,
+      );
+    } else {
+      console.log(`   🔄 Issue #${issue.number} will be retried (attempt ${issue.failCount}/${MAX_RETRIES})`);
+    }
 
     if (worktreePath) {
       console.log('   🧹 Cleaning up worktree...');
