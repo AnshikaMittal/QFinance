@@ -239,7 +239,11 @@ export function DashboardView() {
     const debits = transactions.filter((t) => t.type === 'debit');
     const credits = transactions.filter((t) => t.type === 'credit');
     const totalSpent = debits.reduce((sum, t) => sum + t.amount, 0);
-    const totalIncome = credits.reduce((sum, t) => sum + t.amount, 0);
+    // Exclude credit card bill payments from income — only count credits on debit/checking accounts
+    const creditCardIds = new Set(cards.filter((c) => c.type === 'credit').map((c) => c.id));
+    const totalIncome = credits
+      .filter((t) => !creditCardIds.has(t.cardId))
+      .reduce((sum, t) => sum + t.amount, 0);
 
     // Group debits by category
     const byCategoryTxns: Record<string, Transaction[]> = {};
