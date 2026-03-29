@@ -24,6 +24,8 @@ const ISSUERS = [
   { value: 'discover', label: 'Discover' },
   { value: 'bofa', label: 'Bank of America' },
   { value: 'capital-one', label: 'Capital One' },
+  { value: 'robinhood', label: 'Robinhood' },
+  { value: 'first-tech', label: 'First Tech' },
   { value: 'other', label: 'Other' },
 ];
 

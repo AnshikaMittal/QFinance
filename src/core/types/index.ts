@@ -94,7 +94,7 @@ export interface SyncState {
 }
 
 // Import types
-export type CSVParserType = 'chase' | 'apple-card' | 'generic';
+export type CSVParserType = 'chase' | 'apple-card' | 'citi' | 'robinhood' | 'first-tech' | 'generic';
 export type ImportParserType = CSVParserType | 'chase-pdf' | 'apple-card-pdf';
 
 export interface DetectedCardInfo {
