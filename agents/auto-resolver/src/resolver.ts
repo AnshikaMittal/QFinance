@@ -282,7 +282,7 @@ function invokeClaudeCode(worktreePath: string, module: string, issue: LocalIssu
 
   try {
     execSync(
-      `${claudeBin} --allowedTools "Edit,Read,Glob,Grep" --max-turns 10 -p "$(cat '${promptFile}')"`,
+      `${claudeBin} --model sonnet --allowedTools "Edit,Read,Glob,Grep" --max-turns 10 -p "$(cat '${promptFile}')"`,
       {
         cwd: worktreePath,
         timeout: 300000,
