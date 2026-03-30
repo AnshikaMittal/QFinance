@@ -51,6 +51,8 @@ const DEFAULT_CATEGORIES: Omit<Category, 'id' | 'createdAt'>[] = [
     'raja foods', 'subzi mandi', 'spice bazaar', 'desi basket',
     'namaste plaza', 'india cash & carry', 'bombay bazaar',
     'sri krishna', 'chaat house grocery', 'laxmi',
+    'mayuri foods', 'mayuri', 'suvidha', 'swagath', 'trinethra',
+    'more supermarket', 'reliance fresh', 'namdhari', 'spar',
 
     // ── Hispanic / Latin groceries ──
     'fiesta mart', 'el super', 'cardenas', 'vallarta', 'la michoacana',
