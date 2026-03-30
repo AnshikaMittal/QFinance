@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../../core/db';
 import { Card as UICard, EmptyState } from '../../../ui';
@@ -184,14 +184,14 @@ export function TrendCharts() {
         </div>
       </UICard>
 
-      {/* Monthly trend by category — stacked bar chart */}
-      {topCategories.length > 0 && (
-        <UICard>
+      {/* Monthly trend per category — one chart each */}
+      {topCategories.map((cat) => (
+        <UICard key={cat.name}>
           <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
-            <BarChart3 size={14} className="text-purple-500" />
-            Monthly Trend by Category
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
+            {cat.name}
           </h4>
-          <div className="h-52">
+          <div className="h-36">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={monthlyCategoryData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
@@ -208,15 +208,12 @@ export function TrendCharts() {
                   }}
                   formatter={(value: number) => formatCurrency(value)}
                 />
-                <Legend iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
-                {topCategories.map((cat) => (
-                  <Bar key={cat.name} dataKey={cat.name} stackId="cat" fill={cat.color} radius={[0, 0, 0, 0]} />
-                ))}
+                <Bar dataKey={cat.name} fill={cat.color} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </UICard>
-      )}
+      ))}
 
       {/* Card comparison bar chart */}
       {cardData.length > 1 && (
