@@ -476,6 +476,26 @@ async function notifyTelegram(message: string): Promise<void> {
   } catch { /* best effort — don't break the pipeline */ }
 }
 
+// --- Add Label to GitHub Issue ---
+async function addGitHubLabel(
+  githubToken: string,
+  repo: string,
+  issueNumber: number,
+  label: string,
+): Promise<void> {
+  try {
+    await fetch(`https://api.github.com/repos/${repo}/issues/${issueNumber}/labels`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${githubToken}`,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ labels: [label] }),
+    });
+  } catch { /* best effort */ }
+}
+
 // --- Close GitHub Issue ---
 async function closeGitHubIssue(
   githubToken: string,
@@ -993,14 +1013,22 @@ async function resolveIssue(config: ReturnType<typeof getConfig>, issue: LocalIs
 
     if (issue.status === 'skipped') {
       console.log(`   ⛔ Issue #${issue.number} reached max retries (${maxRetries}) — marked as skipped`);
-      await closeGitHubIssue(config.githubToken, config.githubRepo, issue.number);
+
+      // Keep ALL issues open on GitHub with a label — makes tracking easy
+      await addGitHubLabel(config.githubToken, config.githubRepo, issue.number, 'needs-manual-fix');
       await addGitHubComment(
         config.githubToken,
         config.githubRepo,
         issue.number,
         isMetaIssue(issue)
-          ? `🤖 **Auto-closed** — this is a meta-issue that couldn't be resolved automatically. The underlying issue should be addressed directly.`
-          : `🤖 **Auto-resolver gave up** after ${issue.failCount} failed attempts.\n\nLast error: \`${errorMsg.slice(0, 300)}\`\n\nThis issue needs manual attention.`,
+          ? `🤖 **Auto-resolver gave up** — this meta-issue couldn't be resolved automatically.\n\nThe underlying issue should be addressed directly. Labelled \`needs-manual-fix\`.`
+          : `🤖 **Auto-resolver gave up** after ${issue.failCount} failed attempts.\n\nLast error: \`${errorMsg.slice(0, 300)}\`\n\nLabelled \`needs-manual-fix\` for manual attention.`,
+      );
+      await notifyTelegram(
+        `🚨 *Issue #${issue.number} needs manual fix*\n\n` +
+        `*${issue.title}*\n` +
+        `Auto-resolver failed ${issue.failCount} time(s). Issue is still open on GitHub with \`needs-manual-fix\` label.\n` +
+        `${issue.url}`
       );
     } else {
       console.log(`   🔄 Issue #${issue.number} will be retried (attempt ${issue.failCount}/${maxRetries})`);
