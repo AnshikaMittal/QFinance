@@ -158,10 +158,6 @@ export function TrendCharts() {
                   <stop offset="0%" stopColor="#ef4444" stopOpacity={0.2} />
                   <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
                 </linearGradient>
-                <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#22c55e" stopOpacity={0.2} />
-                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
-                </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: axisColor }} axisLine={false} tickLine={false} />
@@ -178,7 +174,6 @@ export function TrendCharts() {
                 formatter={(value: number) => formatCurrency(value)}
               />
               <Area type="monotone" dataKey="spent" stroke="#ef4444" fill="url(#spentGrad)" strokeWidth={2} name="Spent" />
-              <Area type="monotone" dataKey="income" stroke="#22c55e" fill="url(#incomeGrad)" strokeWidth={2} name="Income" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
