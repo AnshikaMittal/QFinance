@@ -43,20 +43,15 @@ const YEAR_PATTERN = /(?:20\d{2})/;
 export function isChasePDF(lines: string[]): boolean {
   const text = lines.join(' ').toLowerCase();
 
-  // Chase statements typically contain these markers
-  const markers = [
-    'chase',
-    'account number',
-    'payment due',
-    'new balance',
-  ];
-
-  const hasChaseMarkers = markers.filter((m) => text.includes(m)).length >= 2;
+  // Chase statements must explicitly mention "chase" — other issuers (e.g. Citi)
+  // also contain "account number", "payment due", "new balance", so those markers
+  // alone are not sufficient to identify a Chase statement.
+  if (!text.includes('chase')) return false;
 
   // Also check for transaction-like lines
   const hasTransactions = lines.some((l) => TRANSACTION_LINE.test(l.trim()) || SINGLE_DATE_LINE.test(l.trim()));
 
-  return hasChaseMarkers && hasTransactions;
+  return hasTransactions;
 }
 
 /**
