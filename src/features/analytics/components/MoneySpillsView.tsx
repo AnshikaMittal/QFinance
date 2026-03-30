@@ -39,6 +39,13 @@ const SPILL_EXPLANATIONS: Record<string, string> = {
   impulse: 'Purchases made between 10 PM and 5 AM are often impulse buys. Research shows sleeping on it before purchasing eliminates about 30% of these.',
 };
 
+const SPILL_WASTE_LABEL: Record<string, string> = {
+  duplicate: 'potential overcharge',
+  'subscription-forgotten': 'per year if canceled',
+  'spending-creep': 'over your monthly avg',
+  impulse: 'est. avoidable spend',
+};
+
 const SPILL_TIPS: Record<string, string> = {
   duplicate: 'Tip: Check your statement for the exact dates and call your bank to dispute.',
   'subscription-forgotten': 'Tip: Check if the service offers a cheaper plan or free alternative.',
@@ -201,6 +208,7 @@ export function MoneySpillsView() {
         const label = SPILL_LABELS[spill.type] ?? 'Issue';
         const explanation = SPILL_EXPLANATIONS[spill.type] ?? '';
         const tip = SPILL_TIPS[spill.type] ?? '';
+        const wasteLabel = SPILL_WASTE_LABEL[spill.type] ?? 'potential savings';
         const isExpanded = expandedId === spill.id;
 
         const spillTxns = spill.transactions
@@ -224,9 +232,12 @@ export function MoneySpillsView() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <Badge color={color}>{label}</Badge>
-                    <span className="text-sm font-bold text-gray-900 dark:text-white tabular-nums ml-auto">
-                      {formatCurrency(spill.estimatedWaste)}
-                    </span>
+                    <div className="ml-auto text-right">
+                      <span className="text-sm font-bold text-gray-900 dark:text-white tabular-nums block">
+                        {formatCurrency(spill.estimatedWaste)}
+                      </span>
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500">{wasteLabel}</span>
+                    </div>
                   </div>
                   <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
                     {spill.description}
