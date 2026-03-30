@@ -136,6 +136,9 @@ const DEFAULT_CATEGORIES: Omit<Category, 'id' | 'createdAt'>[] = [
     // ── Boba / Tea ──
     'kung fu tea', 'gong cha', 'tiger sugar', 'boba guys',
     'share tea', 'ding tea', 'happy lemon',
+
+    // ── Travel / Airport dining ──
+    'tc journeys',
   ], isDefault: true },
 
   { name: 'Transport', icon: 'car', color: '#3b82f6', keywords: [
