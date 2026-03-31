@@ -165,6 +165,19 @@ export function MoneySpillsView() {
         </div>
       </div>
 
+      {/* What are Money Spills — brief explainer */}
+      <UICard className="bg-blue-50/50 dark:bg-blue-500/5 border-blue-200/30 dark:border-blue-500/10">
+        <div className="flex gap-3 items-start">
+          <AlertTriangle size={16} className="text-blue-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">What are Money Spills?</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+              We scan your transactions for patterns that could be costing you money — duplicate charges, forgotten subscriptions, spending creep (gradual increases), and late-night impulse buys. Tap any card below for details and action steps.
+            </p>
+          </div>
+        </div>
+      </UICard>
+
       {/* Summary card */}
       <UICard className="bg-gradient-to-br from-red-50 to-orange-50 dark:from-red-500/5 dark:to-orange-500/5 border-red-200/50 dark:border-red-500/20">
         <div className="flex items-center justify-between">
@@ -231,6 +244,10 @@ export function MoneySpillsView() {
                   <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
                     {spill.description}
                   </p>
+                  {/* Quick tip visible without expanding */}
+                  {!isExpanded && tip && (
+                    <p className="text-[11px] text-blue-500 dark:text-blue-400 mt-1.5 leading-relaxed">{tip}</p>
+                  )}
                   <div className="flex items-center justify-between mt-2">
                     <span className="text-xs text-gray-400">{spill.period}</span>
                     <div className="flex items-center gap-1 text-xs text-gray-400">
